@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Default Protected Page Template.
+// DefaultProtectedPageTpl is the default protected page template.
 const DefaultProtectedPageTpl = `<!DOCTYPE html>
 <html>
 <head>
@@ -21,14 +21,14 @@ const DefaultProtectedPageTpl = `<!DOCTYPE html>
 </body>
 </html>`
 
-// Template instance.
+// protectedPageTpl is the parsed DefaultProtectedPageTpl html/template instance.
 var protectedPageTpl = template.Must(template.New("oauthmw").Funcs(
 	template.FuncMap{
 		"title": strings.Title,
 	},
 ).Parse(DefaultProtectedPageTpl))
 
-// Default template handler.
+// defaultTemplateFn writes the DefaultProtectedPageTpl to a http.ResponseWriter.
 func defaultTemplateFn(hrefs map[string]string, res http.ResponseWriter, req *http.Request) {
 	protectedPageTpl.Execute(res, hrefs)
 }
