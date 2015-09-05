@@ -1,3 +1,4 @@
+// Package oauthmw provides an OAuth2.0 login flow middleware for Goji.
 package oauthmw
 
 import (
