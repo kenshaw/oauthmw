@@ -28,6 +28,36 @@ const oauthmwcookie = "oauthmw_test"
 
 var rexp = regexp.MustCompile(`(?i)` + oauthmwcookie + `=[^;\s]*`)
 
+func okHandler(wctx web.C, res http.ResponseWriter, req *http.Request) {
+	res.WriteHeader(200)
+	fmt.Fprintf(res, "OK")
+}
+
+func get(mux *web.Mux, path string, cookie *http.Cookie, t *testing.T) (*httptest.ResponseRecorder, string) {
+	rr := httptest.NewRecorder()
+	q, _ := http.NewRequest("GET", path, nil)
+	if cookie != nil {
+		q.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rr, q)
+
+	l := ""
+
+	switch {
+	case rr.Code >= 300 && rr.Code < 400:
+		if len(rr.HeaderMap["Location"]) != 1 {
+			t.Errorf("code %d redirect had 0 or more than 1 location header (count: %d)", rr.Code, len(rr.HeaderMap["Location"]))
+		} else {
+			l = rr.HeaderMap["Location"][0]
+			if len(l) < 1 {
+				t.Error("redirect location should not be empty string")
+			}
+		}
+	}
+
+	return rr, l
+}
+
 func getCookie(rr *httptest.ResponseRecorder, t *testing.T) *http.Cookie {
 	cookieStr := rexp.FindString(rr.HeaderMap["Set-Cookie"][0])
 	cookie := &http.Cookie{
@@ -43,14 +73,16 @@ func getCookie(rr *httptest.ResponseRecorder, t *testing.T) *http.Cookie {
 	return cookie
 }
 
-func okHandler(wctx web.C, res http.ResponseWriter, req *http.Request) {
-	res.WriteHeader(200)
-	fmt.Fprintf(res, "OK")
+func check(code int, rr *httptest.ResponseRecorder, t *testing.T) {
+	if code != rr.Code {
+		t.Logf("GOT: %d -- %s", rr.Code, rr.Body.String())
+		t.Errorf("expected %d, got: %d", code, rr.Code)
+	}
 }
 
-func checkOK(msg string, rr *httptest.ResponseRecorder, t *testing.T) {
+func checkOK(rr *httptest.ResponseRecorder, t *testing.T) {
 	if rr.Code != 200 || rr.Body.String() != "OK" {
-		t.Error(msg)
+		t.Error("should be passed to okHandler")
 	}
 }
 
@@ -58,8 +90,17 @@ func checkError(code int, err string, rr *httptest.ResponseRecorder, t *testing.
 	body := strings.TrimSpace(rr.Body.String())
 	if code != rr.Code || err != body {
 		t.Logf("GOT: %d -- %s", rr.Code, body)
-		t.Error(fmt.Sprintf("should be '%s' error", err))
+		t.Errorf("should be '%s' error", err)
 	}
+}
+
+func urlParse(str string, t *testing.T) *url.URL {
+	u, err := url.Parse(str)
+	if err != nil {
+		t.Errorf("location did not parse correctly: %s -- %s", err, str)
+	}
+
+	return u
 }
 
 var RedirectAttemptedError = errors.New("redirect")
@@ -275,6 +316,7 @@ func getSid(prov *Provider, t *testing.T) string {
 }
 
 func TestLogin(t *testing.T) {
+	// setup oauthmw
 	sess := newSession()
 	prov := newProvider()
 	prov.Session = sess
@@ -285,6 +327,7 @@ func TestLogin(t *testing.T) {
 	}
 	prov.checkDefaults()
 
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.Login(func() bool {
@@ -292,44 +335,27 @@ func TestLogin(t *testing.T) {
 	}))
 	m0.Handle("/ok", okHandler)
 
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", "/ok", nil)
-	m0.ServeHTTP(r0, q0)
-	checkOK("should fall to okHandler", r0, t)
-
-	// grab cookie from request
+	// do initial request to establish session
+	r0, _ := get(m0, "/ok", nil, t)
+	checkOK(r0, t)
 	cookie := getCookie(r0, t)
 
-	// test oauth paths
-	r1 := httptest.NewRecorder()
-	q1, _ := http.NewRequest("GET", "/oauth-redirect-google", nil)
-	q1.AddCookie(cookie)
-	m0.ServeHTTP(r1, q1)
+	// verify 404 if no/bad state provided
+	r1, _ := get(m0, "/oauth-redirect-google", cookie, t)
+	check(404, r1, t)
 
-	// should be 404 if bad/no state passed
-	if r1.Code != 404 {
-		t.Error("should be 404")
-	}
-
+	// verify redirect when correct state provided
 	s2 := encodeState(&prov, getSid(&prov, t), "google", "/resource", t)
-	p2 := "/oauth-redirect-google?state=" + s2
+	r2, l2 := get(m0, "/oauth-redirect-google?state="+s2, cookie, t)
+	check(302, r2, t)
 
-	r2 := httptest.NewRecorder()
-	q2, _ := http.NewRequest("GET", p2, nil)
-	q2.AddCookie(cookie)
-	m0.ServeHTTP(r2, q2)
-
-	if r2.Code != 302 {
-		t.Fatalf("should be redirect")
-	}
-
-	l2 := r2.HeaderMap["Location"][0]
 	if !strings.HasPrefix(l2, "https://accounts.google.com/o/oauth2/auth?client_id=") {
 		t.Errorf("redirect should be to google, got: %s", l2)
 	}
 }
 
 func TestRequireLoginAutoRedirect(t *testing.T) {
+	// setup mux's
 	m0 := web.New()
 
 	m1 := web.New()
@@ -355,7 +381,7 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		// build oauthmw stuff
+		// setup middleware
 		sess := newSession()
 		prov := newProvider()
 		prov.Path = test.path
@@ -364,12 +390,12 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 			"google": newGoogleEndpoint(""),
 		}
 
-		// to catch the subrouter test
+		// enable subrouter test for m2_sub
 		if test.addToMux == m2_sub {
 			prov.SubRouter = true
 		}
 
-		// add middleware
+		// add middleware to mux
 		sessmw := sess.Middleware()
 		rlmw := prov.RequireLogin(func() bool {
 			return true
@@ -377,15 +403,9 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 		test.addToMux.Use(sessmw)
 		test.addToMux.Use(rlmw)
 
-		// run test
-		r0 := httptest.NewRecorder()
-		q0, _ := http.NewRequest("GET", test.path, nil)
-		test.mux.ServeHTTP(r0, q0)
-		if r0.Code != 302 {
-			t.Fatalf("test %d should be redirected", i)
-		}
-
-		l0 := r0.HeaderMap["Location"][0]
+		// check for redirect
+		r0, l0 := get(test.mux, test.path, nil, t)
+		check(302, r0, t)
 		if !strings.HasPrefix(l0, test.redir) {
 			t.Errorf("test %d invalid redirect %s", i, l0)
 		}
@@ -431,7 +451,7 @@ func TestRequireLoginFlow(t *testing.T) {
 	}
 
 	for i, test := range tests {
-		// build oauthmw stuff
+		// build oauthmw
 		prov := newProvider()
 		sess := newSession()
 		prov.Session = sess
@@ -439,7 +459,7 @@ func TestRequireLoginFlow(t *testing.T) {
 		prov.Configs = configs
 		prov.TokenLifetime = 1 * time.Minute
 
-		// build mux and add middleware
+		// setup mux and middleware
 		m0 := web.New()
 		m0.Use(sess.Middleware())
 		m0.Use(prov.RequireLogin(func() bool {
@@ -447,19 +467,13 @@ func TestRequireLoginFlow(t *testing.T) {
 		}))
 		m0.Handle("/*", okHandler)
 
-		// do initial request
-		r0 := httptest.NewRecorder()
-		q0, _ := http.NewRequest("GET", test.req, nil)
-		m0.ServeHTTP(r0, q0)
-
-		if r0.Code != 200 {
-			t.Errorf("test %d should return 200, got: %d", i, r0.Code)
-		}
-
+		// do initial request to establish session
+		r0, _ := get(m0, test.req, nil, t)
+		check(200, r0, t)
 		cookie := getCookie(r0, t)
 
-		// verify we didn't hit the OK handler
-		b0 := r0.Body.String()
+		// verify we DIDN'T hit the OK handler
+		b0 := strings.TrimSpace(r0.Body.String())
 		if b0 == "OK" {
 			t.Errorf("body should not be OK")
 		}
@@ -476,22 +490,9 @@ func TestRequireLoginFlow(t *testing.T) {
 
 		// loop over matches and test href for each
 		for _, match := range matches {
-			// build recorder
-			r1 := httptest.NewRecorder()
-			q1, _ := http.NewRequest("GET", match[1], nil)
-			q1.AddCookie(cookie)
-			m0.ServeHTTP(r1, q1)
-
-			if r1.Code != 302 {
-				t.Errorf("test %d GET %s should redirect", i, match[1])
-			}
-
-			// check redirect location
-			l1 := r1.HeaderMap["Location"][0]
-			if len(l1) < 1 {
-				t.Error("should have redirect location")
-			}
-
+			// check that the request correctly generates redirect, and is valid url
+			r1, l1 := get(m0, match[1], cookie, t)
+			check(302, r1, t)
 			u0, err := url.Parse(l1)
 			if err != nil {
 				t.Errorf("location did not parse correctly: %s -- %s", err, u0)
@@ -508,36 +509,21 @@ func TestRequireLoginFlow(t *testing.T) {
 				// osin/example.TestStorage
 				u1.Path = test.path + "/oauth-login"
 
-				// setup recorder/request for return (oauth-login)
-				r2 := httptest.NewRecorder()
-				q2, _ := http.NewRequest("GET", u1.String(), nil)
-				q2.AddCookie(cookie)
-				m0.ServeHTTP(r2, q2)
-
-				// result should be a redirect back to original resource path
-				if r2.Code != 301 {
-					t.Fatalf("should be 301 after auth, got: %d", r2.Code)
-				}
+				// do oauth-login
+				r2, l2 := get(m0, u1.String(), cookie, t)
+				check(301, r2, t)
 
 				// verify redirect resource path is same as original request
-				l2 := r2.HeaderMap["Location"][0]
 				if test.req != l2 {
 					t.Errorf("test %d req path (%s) redir should be same after auth, got: %s", i, test.req, l2)
 				}
 
-				// check original resource path now is passed to 'OK' handler
-				r3 := httptest.NewRecorder()
-				q3, _ := http.NewRequest("GET", test.req, nil)
-				q3.AddCookie(cookie)
-				m0.ServeHTTP(r3, q3)
+				// check original resource path now passes to 'OK' handler
+				r3, _ := get(m0, test.req, cookie, t)
+				checkOK(r3, t)
 
-				checkOK(fmt.Sprintf("test %d after auth should be OK", i), r3, t)
-
-				// make sure double redemption not possible
-				r4 := httptest.NewRecorder()
-				q4, _ := http.NewRequest("GET", u1.String(), nil)
-				q4.AddCookie(cookie)
-				m0.ServeHTTP(r4, q4)
+				// check for double redemption error
+				r4, _ := get(m0, u1.String(), cookie, t)
 				checkError(500, "already redeemed. try again", r4, t)
 			}
 		}
@@ -549,8 +535,10 @@ func TestRequireLoginFlow(t *testing.T) {
 
 // test really long resource paths (limit to what securecookie can encode)
 func TestInvalidStates(t *testing.T) {
+	// resource path
 	respath := "/" + strings.Repeat("x", 4096)
 
+	// setup oauthmw
 	sess := newSession()
 	prov := newProvider()
 	prov.Path = "/"
@@ -559,6 +547,7 @@ func TestInvalidStates(t *testing.T) {
 		"google": newGoogleEndpoint(""),
 	}
 
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.RequireLogin(func() bool {
@@ -566,26 +555,22 @@ func TestInvalidStates(t *testing.T) {
 	}))
 	m0.Handle("/*", okHandler)
 
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", respath, nil)
-	m0.ServeHTTP(r0, q0)
-
+	r0, _ := get(m0, respath, nil, t)
 	checkError(500, "could not encode state for google", r0, t)
 
-	// same test, but with multiple providers
+	//--------------------------------------
+	// repeat above test, but with multiple providers
 	prov.Configs["facebook"] = newFacebookEndpoint("")
 
+	// setup mux and middleware
 	m1 := web.New()
 	m1.Use(sess.Middleware())
 	m1.Use(prov.RequireLogin(func() bool {
 		return true
 	}))
-
 	m1.Handle("/*", okHandler)
-	r1 := httptest.NewRecorder()
-	q1, _ := http.NewRequest("GET", respath, nil)
-	m1.ServeHTTP(r1, q1)
 
+	r1, _ := get(m1, respath, nil, t)
 	checkError(500, "could not encode state for facebook (2)", r1, t)
 }
 
@@ -615,6 +600,7 @@ func checkStatesCount(prov *Provider, count int, msg string, t *testing.T) {
 }
 
 func TestStatesCleanup(t *testing.T) {
+	// setup oauthmw
 	sess := newSession()
 	prov := newProvider()
 	prov.Path = "/"
@@ -625,6 +611,7 @@ func TestStatesCleanup(t *testing.T) {
 	}
 	prov.checkDefaults()
 
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.Login(func() bool {
@@ -632,33 +619,19 @@ func TestStatesCleanup(t *testing.T) {
 	}))
 	m0.Handle("/ok", okHandler)
 
-	// do initial request
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", "/ok", nil)
-	m0.ServeHTTP(r0, q0)
-
-	if r0.Code != 200 {
-		t.Errorf("should return 200, got: %d", r0.Code)
-	}
-
+	// do initial request to establish session
+	r0, _ := get(m0, "/ok", nil, t)
+	checkOK(r0, t)
 	cookie := getCookie(r0, t)
 
 	// add a lot of states
 	for i := 0; i < 2*DefaultMaxStates; i++ {
+		// do redirect request to have state added to session
 		s1 := encodeState(&prov, getSid(&prov, t), "google", "/resource", t)
-		p1 := "/oauth-redirect-google?state=" + s1
+		r1, l1 := get(m0, "/oauth-redirect-google?state="+s1, cookie, t)
+		check(302, r1, t)
 
-		// send request
-		r1 := httptest.NewRecorder()
-		q1, _ := http.NewRequest("GET", p1, nil)
-		q1.AddCookie(cookie)
-		m0.ServeHTTP(r1, q1)
-
-		if r1.Code != 302 {
-			t.Fatalf("code should be 302, got: %d -- %s", r1.Code, r1.Body.String())
-		}
-
-		l1 := r1.HeaderMap["Location"][0]
+		// verify redirect is correct
 		if !strings.HasPrefix(l1, "https://accounts.google.com/o/oauth2/auth?client_id=") {
 			t.Errorf("redirect should be to google, got: %s", l1)
 		}
@@ -670,15 +643,14 @@ func TestStatesCleanup(t *testing.T) {
 	setStatesExpiration(&prov, time.Now().Add(-1*time.Hour), t)
 
 	// kick cleanup
-	r2 := httptest.NewRecorder()
-	q2, _ := http.NewRequest("GET", "/ok", nil)
-	q2.AddCookie(cookie)
-	m0.ServeHTTP(r2, q2)
+	r2, _ := get(m0, "/ok", cookie, t)
+	checkOK(r2, t)
 
 	checkStatesCount(&prov, 0, "states should be empty after cleanup", t)
 }
 
 func TestRedirectErrors(t *testing.T) {
+	// setup oauthmw
 	sess := newSession()
 	prov := newProvider()
 	prov.Session = sess
@@ -689,6 +661,7 @@ func TestRedirectErrors(t *testing.T) {
 	}
 	prov.checkDefaults()
 
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.Login(func() bool {
@@ -696,48 +669,26 @@ func TestRedirectErrors(t *testing.T) {
 	}))
 	m0.Handle("/ok", okHandler)
 
-	//--------------------------------------
-	// initial setup
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", "/ok", nil)
-	m0.ServeHTTP(r0, q0)
-	checkOK("should fall to okHandler", r0, t)
-
-	// grab cookie from request
+	// do initial request to establish session
+	r0, _ := get(m0, "/ok", nil, t)
+	checkOK(r0, t)
 	cookie := getCookie(r0, t)
-	//--------------------------------------
 
-	//--------------------------------------
-	state := encodeState(&prov, getSid(&prov, t), "google", "/resource", t)
-	//--------------------------------------
+	// encode correct state
+	s0 := encodeState(&prov, getSid(&prov, t), "google", "/resource", t)
 
-	//--------------------------------------
 	// check bad provider
-	r1 := httptest.NewRecorder()
-	q1, _ := http.NewRequest("GET", "/oauth-redirect-bad?state="+state, nil)
-	q1.AddCookie(cookie)
-	m0.ServeHTTP(r1, q1)
+	r1, _ := get(m0, "/oauth-redirect-bad?state="+s0, cookie, t)
 	checkError(500, "invalid provider", r1, t)
-	//--------------------------------------
 
-	//--------------------------------------
 	// check forged sid
-	s01 := encodeState(&prov, "", "google", "/resource", t)
-	r01 := httptest.NewRecorder()
-	q01, _ := http.NewRequest("GET", "/oauth-redirect-google?state="+s01, nil)
-	q01.AddCookie(cookie)
-	m0.ServeHTTP(r01, q01)
-	checkError(500, "forged sid in redirect", r01, t)
-	//--------------------------------------
+	s2 := encodeState(&prov, "", "google", "/resource", t)
+	r2, _ := get(m0, "/oauth-redirect-google?state="+s2, cookie, t)
+	checkError(500, "forged sid in redirect", r2, t)
 
-	//--------------------------------------
-	// test forged provider
-	r2 := httptest.NewRecorder()
-	q2, _ := http.NewRequest("GET", "/oauth-redirect-facebook?state="+state, nil)
-	q2.AddCookie(cookie)
-	m0.ServeHTTP(r2, q2)
-	checkError(500, "forged provider in redirect", r2, t)
-	//--------------------------------------
+	// check forged provider
+	r3, _ := get(m0, "/oauth-redirect-facebook?state="+s0, cookie, t)
+	checkError(500, "forged provider in redirect", r3, t)
 }
 
 func setStatesExpiration(prov *Provider, expiration time.Time, t *testing.T) {
@@ -814,7 +765,7 @@ func TestReturnErrors(t *testing.T) {
 	client := newClient(server.URL)
 	oauth2Context = context.WithValue(oauth2Context, oauth2.HTTPClient, client)
 
-	// build oauthmw stuff
+	// setup oauthmw
 	prov := newProvider()
 	sess := newSession()
 	prov.Session = sess
@@ -824,7 +775,7 @@ func TestReturnErrors(t *testing.T) {
 	}
 	prov.checkDefaults()
 
-	// build mux and add middleware
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.RequireLogin(func() bool {
@@ -832,178 +783,92 @@ func TestReturnErrors(t *testing.T) {
 	}))
 	m0.Handle("/*", okHandler)
 
-	//--------------------------------------
-	// do basic request
-	r00 := httptest.NewRecorder()
-	q00, _ := http.NewRequest("GET", "/", nil)
-	m0.ServeHTTP(r00, q00)
-	if r00.Code != 302 {
-		t.Fatalf("should 302 redirect, got: %d", r00.Code)
-	}
-
+	// do initial request to establish session
+	r00, _ := get(m0, "/", nil, t)
+	check(302, r00, t)
 	cookie := getCookie(r00, t)
-	//--------------------------------------
 
-	//--------------------------------------
-	// do setup request
+	// do redirect request to have state added to session
 	s0 := encodeState(&prov, getSid(&prov, t), "osin", "/resource", t)
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", "/oauth-redirect-osin?state="+s0, nil)
-	q0.AddCookie(cookie)
-	m0.ServeHTTP(r0, q0)
+	r0, l0 := get(m0, "/oauth-redirect-osin?state="+s0, cookie, t)
+	check(302, r0, t)
+	urlParse(l0, t)
 
-	if r0.Code != 302 {
-		t.Fatalf("should 302 redirect, got: %d", r0.Code)
-	}
-
-	// check redirect
-	l0 := r0.HeaderMap["Location"][0]
-	if len(l0) < 1 {
-		t.Error("should have redirect location")
-	}
-
-	u0, err := url.Parse(l0)
-	if err != nil {
-		t.Errorf("location did not parse correctly: %s -- %s", err, u0)
-	}
-
-	// verify pointing to osin server
+	// verify redirect is to osin server
 	if !strings.HasPrefix(l0, server.URL) {
 		t.Fatalf("redir location should be server.URL, got: %s", l0)
 	}
-	//--------------------------------------
 
-	//--------------------------------------
-	// change path due to hard coded values in
-	// osin/example.TestStorage
+	// do authorize request with osin server
 	resp, err := client.Get(l0)
 	u1 := checkAuthResp(resp, err, t)
+
+	// change return path due to hard coded values in osin/example.TestStorage
 	u1.Path = "/oauth-login"
-	//--------------------------------------
 
-	//--------------------------------------
-	// send a bad code
-	p1 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
-		"badcode",
-		s0,
-	)
-
-	// check that state is not there
-	r1 := httptest.NewRecorder()
-	q1, _ := http.NewRequest("GET", p1, nil)
-	q1.AddCookie(cookie)
-	m0.ServeHTTP(r1, q1)
+	// check exchange error
+	q1 := fmt.Sprintf("code=%s&state=%s", "badcode", s0)
+	r1, _ := get(m0, "/oauth-login?"+q1, cookie, t)
 	checkError(500, "could not do exchange with osin", r1, t)
-	//--------------------------------------
 
-	//--------------------------------------
-	// get bad (already expired) token from server
-	p2 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
+	// check state not present in session
+	q2 := fmt.Sprintf(
+		"code=%s&state=%s",
 		url.QueryEscape(u1.Query().Get("code")),
 		encodeState(&prov, getSid(&prov, t), "osin", "/resource", t),
 	)
-
-	// check that state is not there
-	r2 := httptest.NewRecorder()
-	q2, _ := http.NewRequest("GET", p2, nil)
-	q2.AddCookie(cookie)
-	m0.ServeHTTP(r2, q2)
+	r2, _ := get(m0, "/oauth-login?"+q2, cookie, t)
 	checkError(500, "state not found in session", r2, t)
-	//--------------------------------------
 
-	//--------------------------------------
-	// check expired state
+	// expire states
 	setStatesExpiration(&prov, time.Now().Add(-1*time.Hour), t)
-	r3 := httptest.NewRecorder()
-	q3, _ := http.NewRequest("GET", u1.String(), nil)
-	q3.AddCookie(cookie)
-	m0.ServeHTTP(r3, q3)
+
+	// check that expired states are not redeemable
+	r3, _ := get(m0, u1.String(), cookie, t)
 	checkError(500, "request expired. try again", r3, t)
+
+	// reset states expiration
 	setStatesExpiration(&prov, time.Now().Add(1*time.Hour), t)
-	//--------------------------------------
 
-	//--------------------------------------
 	// check bad sid in state
-	badState04 := addBadState(&prov, map[string]string{
-		"sid":      "",
-		"provider": "osin",
-		"resource": "/resource",
-	}, t)
-
-	p04 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
+	q4 := fmt.Sprintf("code=%s&state=%s",
 		u1.Query().Get("code"),
-		badState04,
+		addBadState(&prov, map[string]string{
+			"sid":      "",
+			"provider": "osin",
+			"resource": "/resource",
+		}, t),
 	)
-	r04 := httptest.NewRecorder()
-	q04, _ := http.NewRequest("GET", p04, nil)
-	q04.AddCookie(cookie)
-	m0.ServeHTTP(r04, q04)
-	checkError(500, "forged sid in return", r04, t)
-	//--------------------------------------
+	r4, _ := get(m0, "/oauth-login?"+q4, cookie, t)
+	checkError(500, "forged sid in return", r4, t)
 
-	//--------------------------------------
 	// check bad provider in state
-	badState4 := addBadState(&prov, map[string]string{
-		"sid":      getSid(&prov, t),
-		"provider": "",
-		"resource": "/resource",
-	}, t)
-
-	p4 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
+	q5 := fmt.Sprintf("code=%s&state=%s",
 		u1.Query().Get("code"),
-		badState4,
+		addBadState(&prov, map[string]string{
+			"sid":      getSid(&prov, t),
+			"provider": "",
+			"resource": "/resource",
+		}, t),
 	)
-	r4 := httptest.NewRecorder()
-	q4, _ := http.NewRequest("GET", p4, nil)
-	q4.AddCookie(cookie)
-	m0.ServeHTTP(r4, q4)
-	checkError(500, "invalid provider", r4, t)
-	//--------------------------------------
+	r5, _ := get(m0, "/oauth-login?"+q5, cookie, t)
+	checkError(500, "invalid provider", r5, t)
 
-	//--------------------------------------
-	// check missing resource in state
-	badState5 := addBadState(&prov, map[string]string{
-		"sid":      getSid(&prov, t),
-		"provider": "osin",
-	}, t)
-
-	p5 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
+	// check bad resource in state
+	q6 := fmt.Sprintf("code=%s&state=%s",
 		u1.Query().Get("code"),
-		badState5,
+		addBadState(&prov, map[string]string{
+			"sid":      getSid(&prov, t),
+			"provider": "osin",
+		}, t),
 	)
-	r5 := httptest.NewRecorder()
-	q5, _ := http.NewRequest("GET", p5, nil)
-	q5.AddCookie(cookie)
-	m0.ServeHTTP(r5, q5)
-	checkError(500, "invalid resource", r5, t)
-	//--------------------------------------
+	r6, _ := get(m0, "/oauth-login?"+q6, cookie, t)
+	checkError(500, "invalid resource", r6, t)
 
-	//--------------------------------------
-	// send a bad token
-	p6 := fmt.Sprintf(
-		"%s?code=%s&state=%s",
-		u1.Path,
-		"badtoken",
-		s0,
-	)
-
-	// check that state is not there
-	r6 := httptest.NewRecorder()
-	q6, _ := http.NewRequest("GET", p6, nil)
-	q6.AddCookie(cookie)
-	m0.ServeHTTP(r6, q6)
-	checkError(403, http.StatusText(403), r6, t)
-	//--------------------------------------
+	// check bad auth token passed from oauth server
+	q7 := fmt.Sprintf("code=%s&state=%s", "badtoken", s0)
+	r7, _ := get(m0, "/oauth-login?"+q7, cookie, t)
+	checkError(403, http.StatusText(403), r7, t)
 
 	// reset context
 	oauth2Context = oauth2.NoContext
@@ -1038,6 +903,7 @@ func swapSessionStore(prov *Provider, obj interface{}, doErr bool, t *testing.T)
 }
 
 func TestSessionStore(t *testing.T) {
+	// setup oauthmw
 	sess := newSession()
 	prov := newProvider()
 	prov.Session = sess
@@ -1047,6 +913,7 @@ func TestSessionStore(t *testing.T) {
 	}
 	prov.checkDefaults()
 
+	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
 	m0.Use(prov.Login(func() bool {
@@ -1054,15 +921,12 @@ func TestSessionStore(t *testing.T) {
 	}))
 	m0.Handle("/ok", okHandler)
 
-	r0 := httptest.NewRecorder()
-	q0, _ := http.NewRequest("GET", "/ok", nil)
-	m0.ServeHTTP(r0, q0)
-	checkOK("should fall to okHandler", r0, t)
-
-	// grab cookie from request
+	// do initial request to establish session
+	r0, _ := get(m0, "/ok", nil, t)
+	checkOK(r0, t)
 	cookie := getCookie(r0, t)
 
-	// corrupt session store
+	// set session store to bad data
 	obj0 := swapSessionStore(&prov, "baddata", true, t)
 	_, ok := obj0.(Store)
 	if !ok {
@@ -1070,11 +934,8 @@ func TestSessionStore(t *testing.T) {
 	}
 
 	// send another request
-	r1 := httptest.NewRecorder()
-	q1, _ := http.NewRequest("GET", "/ok", nil)
-	q1.AddCookie(cookie)
-	m0.ServeHTTP(r1, q1)
-	checkOK("should fall to okHandler", r1, t)
+	r1, _ := get(m0, "/ok", cookie, t)
+	checkOK(r1, t)
 
 	// check that store is no longer corrupted
 	obj1 := swapSessionStore(&prov, obj0, true, t)
@@ -1085,13 +946,10 @@ func TestSessionStore(t *testing.T) {
 
 	// test nil token
 	_ = swapSessionStore(&prov, Store{Token: nil}, false, t)
-	r2 := httptest.NewRecorder()
-	q2, _ := http.NewRequest("GET", "/ok", nil)
-	q2.AddCookie(cookie)
-	m0.ServeHTTP(r2, q2)
-	checkOK("should fall to okHandler", r2, t)
+	r2, _ := get(m0, "/ok", cookie, t)
+	checkOK(r2, t)
 
-	// test expired token
+	// setup mux and middleware
 	m1 := web.New()
 	m1.Use(sess.Middleware())
 	m1.Use(prov.RequireLogin(func() bool {
@@ -1099,45 +957,33 @@ func TestSessionStore(t *testing.T) {
 	}))
 	m1.Handle("/ok", okHandler)
 
-	r3 := httptest.NewRecorder()
-	q3, _ := http.NewRequest("GET", "/ok", nil)
-	q3.AddCookie(cookie)
-	m1.ServeHTTP(r3, q3)
-	if r3.Code != 302 {
-		t.Fatalf("should be redirect")
-	}
+	// check expired token
+	r3, _ := get(m1, "/ok", cookie, t)
+	check(302, r3, t)
 
-	// create a token
-	tok3 := oauth2.Token{
+	// create token
+	t3 := oauth2.Token{
 		AccessToken: "access",
 		TokenType:   "bearer",
 		Expiry:      time.Now().Add(1 * time.Hour),
 	}
 
 	// put token in session
-	_ = swapSessionStore(&prov, Store{
-		Token:  &tok3,
+	swapSessionStore(&prov, Store{
+		Token:  &t3,
 		States: make(map[string]StoreState),
 	}, true, t)
 
-	// test that there is access
-	r4 := httptest.NewRecorder()
-	q4, _ := http.NewRequest("GET", "/ok", nil)
-	q4.AddCookie(cookie)
-	m1.ServeHTTP(r4, q4)
-	checkOK("should fall to okHandler", r4, t)
+	// check access
+	r4, _ := get(m1, "/ok", cookie, t)
+	checkOK(r4, t)
 
-	// set token as expired
-	tok3.Expiry = time.Now().Add(-1 * time.Hour)
+	// force token expiration
+	t3.Expiry = time.Now().Add(-1 * time.Hour)
 
-	// test that access has been revoked
-	r5 := httptest.NewRecorder()
-	q5, _ := http.NewRequest("GET", "/ok", nil)
-	q5.AddCookie(cookie)
-	m1.ServeHTTP(r5, q5)
-	if r5.Code != 302 {
-		t.Error("should be redirect")
-	}
+	// check that access has been revoked
+	r5, _ := get(m1, "/ok", cookie, t)
+	check(302, r5, t)
 }
 
 // test multiple / different sub paths. each should still require login
