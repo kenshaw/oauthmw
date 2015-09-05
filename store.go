@@ -7,21 +7,21 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Middleware session store.
+// Store is the object used by oauthmw in the session.
 type Store struct {
 	Token  *oauth2.Token
 	States map[string]StoreState
 }
 
-// Passed oauth2 state store.
+// StoreState is storage for a passed oauth2 in a session.
 type StoreState struct {
 	Provider   string
 	Expiration time.Time
 	Redeemed   bool
 }
 
-// register above types for ymichael/sessions gob.encode/decode
 func init() {
+	// register oauthmw stores for use by ymichael/sessions gob.encode/decode
 	gob.Register(Store{})
 	gob.Register(StoreState{})
 }

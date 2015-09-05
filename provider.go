@@ -15,72 +15,138 @@ import (
 )
 
 const (
-	// Default key for oauthmw session store
+	// DefaultSessionKey is the default key used for the oauthmw session store.
+	//
+	// Override with Provider.SessionKey
 	DefaultSessionKey = "oauthmw"
 
-	DefaultPagePrefix     = "oauth-"
-	DefaultReturnName     = "login"
-	DefaultLogoutName     = "logout"
+	// DefaultPagePrefix is the default page prefix used for oauthmw pages.
+	//
+	// Override with Provider.PagePrefix
+	DefaultPagePrefix = "oauth-"
+
+	// DefaultRedirectPrefix is the default prefix used for redirects to
+	// OAuth2.0 pages.
+	//
+	// Override with Provider.
 	DefaultRedirectPrefix = "redirect-"
 
-	// Default lifetime of a session token
-	DefaultSessionLifetime = 12 * time.Hour
+	// DefaultReturnName is the default path name used for return (login).
+	//
+	// Override with Provider.ReturnName
+	DefaultReturnName = "login"
 
-	// Default max number of states allowed in each user's session storage
-	DefaultMaxStates = 128 // FIXME -- implement this correctly ...
+	// DefaultLogoutName is the default path name used for logout.
+	//
+	// Please note this is not yet implemented.
+	//
+	// Override with Provider.LogoutName
+	DefaultLogoutName = "logout"
+
+	// DefaultStateLifetime is the default lifetime (ttl) for an oauth2
+	// transfer state.
+	//
+	// Override with Provider.StateLifetime
+	DefaultStateLifetime = 12 * time.Hour
+
+	// DefaultMaxStates is the maximum number of states allowed in the session
+	// storage before a cleanup is triggered.
+	//
+	// Override with Provider.MaxStates
+	DefaultMaxStates = 128
 )
 
 // Provider configuration.
 type Provider struct {
-	// Secrets for oauth2 transfer state (passed to gorilla/securecookie)
-	Secret      string
+	// Secret for oauth2 transfer state (passed to gorilla/securecookie).
+	//
+	// Must not be empty.
+	Secret string
+
+	// BlockSecret for oauth2 transfer state (passed to gorilla/securecookie).
+	//
+	// Must not be empty.
 	BlockSecret string
 
-	// oauth2 configs
-	Configs map[string]*oauth2.Config
-
-	// Session management object used to retrieve/set user's session
-	Session *sessions.SessionOptions
-
-	// Secured path
+	// Path that is being secured.
+	//
+	// Used for redirects. Must not be empty.
 	Path string
 
-	// Session storage configuration
-	// SessionKey should be unique per path
-	SessionKey      string
-	SessionLifetime time.Duration
+	// Configs for oauth2
+	Configs map[string]*oauth2.Config
 
-	// Token lifetime after redemption
+	// Session management object used to retrieve/set user's session.
+	//
+	// Please see ymichael/sessions for documentation on configuring this.
+	Session *sessions.SessionOptions
+
+	// SessionKey is the key used to retrieve the oauthmw states from the
+	// session.
+	//
+	// Should be unique per path.
+	//
+	// If empty, then this is set as the DefaultSessionKey plus the first 6
+	// characters of the md5 hash of the Provider.Path.
+	SessionKey string
+
+	// StateLifetime is the lifetime (ttl) of an oauth2 transfer state.
+	StateLifetime time.Duration
+
+	// TokenLifetime is maximum allowed token lifetime (ttl) after redemption.
+	//
+	// This is useful if you want to force an expiration for redeemed oauth2
+	// tokens.
 	TokenLifetime time.Duration
 
-	// Middleware path configuration
-	PagePrefix     string
-	ReturnName     string
-	LogoutName     string
+	// PagePrefix is the prefix used to check all page requests (default: "oauth-")
+	//
+	// All redirect/return/logout paths must start with this prefix.
+	PagePrefix string
+
+	// RedirectPrefix is the optional path prefix used for redirects (default: "redirect-").
 	RedirectPrefix string
 
+	// ReturnName is the path name used for returns (default: "login").
+	ReturnName string
+
+	// LogoutName is the path name used for logout (default: "logout").
+	//
+	// Please note that logout is not yet implemented.
+	LogoutName string
+
+	// ConfigsOrder is an optional for the configs processing on the protected
+	// page template.
+	//
 	// Optional to specify, but when provided then this is the order that
 	// providers are listed in the template to users.
-	ConfigsOrder []string // FIXME -- not working as wanted
+	ConfigsOrder []string // FIXME -- not implemented properly
 
-	// Function used for templates
+	// TemplateFn is the function used for generating template on protected
+	// page when there is no valid oauth2.Token in the session.
 	TemplateFn func(map[string]string, http.ResponseWriter, *http.Request)
 
-	// Goji stuff
+	// SubRouter toggles SubRouter path handling for goji subrouter middleware.
 	SubRouter bool
 
-	// Should states be cleaned up if they are past expiration
+	// CleanupStates when true causes simple cleanup to happen on the oauth2
+	// transfer states stored in the session that are already expired.
 	CleanupStates bool
-	MaxStates     int
+
+	// MaxStates is the number of states allowed before cleanup is triggered.
+	//
+	// Set to -1 for unlimited states.
+	MaxStates int
 }
 
-// Encode oauth2 transfer state for a named provider.
-func (p Provider) EncodeState(sessionId, provName, resource string) (string, error) {
+// EncodeState returns an encoded (and secure) oauth2 transfer state for the
+// provided session id, named provider, and specified resource.
+func (p Provider) EncodeState(sessionID, provName, resource string) (string, error) {
 	sc := securecookie.New([]byte(p.Secret), []byte(p.BlockSecret))
-	sc.MaxAge(int(p.SessionLifetime))
+	sc.MaxAge(int(p.StateLifetime))
 
 	state := map[string]string{
-		"sid":      sessionId,
+		"sid":      sessionID,
 		"provider": provName,
 		"resource": resource,
 	}
@@ -88,10 +154,10 @@ func (p Provider) EncodeState(sessionId, provName, resource string) (string, err
 	return sc.Encode(p.SessionKey, state)
 }
 
-// Decode oauth2 transfer state encoded with EncodeState.
+// DecodeState decodes the oauth2 transfer state encoded with EncodeState.
 func (p Provider) DecodeState(data string) (map[string]string, error) {
 	sc := securecookie.New([]byte(p.Secret), []byte(p.BlockSecret))
-	sc.MaxAge(int(p.SessionLifetime))
+	sc.MaxAge(int(p.StateLifetime))
 
 	state := make(map[string]string)
 	err := sc.Decode(p.SessionKey, data, &state)
@@ -99,7 +165,7 @@ func (p Provider) DecodeState(data string) (map[string]string, error) {
 	return state, err
 }
 
-// Check (and set) defaults on Provider if not provided at object construction.
+// checkDefaults checks (and sets) defaults on Provider
 func (p *Provider) checkDefaults() {
 	if p.Secret == "" {
 		panic(errors.New("oauthmw provider Secret cannot be empty string"))
@@ -113,8 +179,17 @@ func (p *Provider) checkDefaults() {
 		panic(errors.New("oauthmw provider Path cannot be empty string"))
 	}
 
+	if p.SessionKey == "" {
+		h := md5.Sum([]byte(p.Path))
+		p.SessionKey = fmt.Sprintf("%s%x", DefaultSessionKey, h[:3])
+	}
+
 	if p.PagePrefix == "" {
 		p.PagePrefix = "/" + DefaultPagePrefix
+	}
+
+	if p.RedirectPrefix == "" {
+		p.RedirectPrefix = p.PagePrefix + DefaultRedirectPrefix
 	}
 
 	if p.ReturnName == "" {
@@ -125,17 +200,8 @@ func (p *Provider) checkDefaults() {
 		p.LogoutName = p.PagePrefix + DefaultLogoutName
 	}
 
-	if p.RedirectPrefix == "" {
-		p.RedirectPrefix = p.PagePrefix + DefaultRedirectPrefix
-	}
-
-	if p.SessionKey == "" {
-		h := md5.Sum([]byte(p.Path))
-		p.SessionKey = fmt.Sprintf("%s%x", DefaultSessionKey, h[:3])
-	}
-
-	if p.SessionLifetime == 0 {
-		p.SessionLifetime = DefaultSessionLifetime
+	if p.StateLifetime == 0 {
+		p.StateLifetime = DefaultStateLifetime
 	}
 
 	if p.TemplateFn == nil {
@@ -158,7 +224,7 @@ func (p *Provider) checkDefaults() {
 	}
 }
 
-// Build login provider.
+// buildLogin creates the actual login provider.
 func (p Provider) buildLogin(checkFn func() bool, required bool) func(*web.C, http.Handler) http.Handler {
 	prov := &p
 	prov.checkDefaults()
@@ -182,12 +248,18 @@ func (p Provider) buildLogin(checkFn func() bool, required bool) func(*web.C, ht
 	}
 }
 
-// Provide simple login
+// Login provides goji.MiddlewareType that handles oauth2 login flows, but does
+// not require there to be a login.
+//
+// NOTE: Any mux using this middleware WILL be visible to an unauthenticated
+// user.
 func (p Provider) Login(checkFn func() bool) func(*web.C, http.Handler) http.Handler {
 	return p.buildLogin(checkFn, false)
 }
 
-// Require user to be logged in to oauth provider.
+// RequireLogin provides goji.MiddlewareType that handles oauth2 login flows,
+// requiring that there be a valid login prior to acessing a protected
+// resource.
 func (p Provider) RequireLogin(checkFn func() bool) func(*web.C, http.Handler) http.Handler {
 	return p.buildLogin(checkFn, true)
 }

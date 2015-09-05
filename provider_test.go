@@ -103,7 +103,7 @@ func urlParse(str string, t *testing.T) *url.URL {
 	return u
 }
 
-var RedirectAttemptedError = errors.New("redirect")
+var ErrRedirectAttempted = errors.New("redirect attempted")
 
 func newClient(serverurl string) *http.Client {
 	// create a http client with requests proxied to httptest server
@@ -116,13 +116,13 @@ func newClient(serverurl string) *http.Client {
 
 		// prevent redirects from happening
 		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return RedirectAttemptedError
+			return ErrRedirectAttempted
 		},
 	}
 }
 
 func checkAuthResp(resp *http.Response, err error, t *testing.T) *url.URL {
-	if urlError, ok := err.(*url.Error); ok && urlError.Err == RedirectAttemptedError {
+	if urlError, ok := err.(*url.Error); ok && urlError.Err == ErrRedirectAttempted {
 		err = nil
 	}
 
@@ -155,7 +155,7 @@ func encodeState(prov *Provider, sid, provName, resource string, t *testing.T) s
 
 func encodeBadState(p *Provider, state map[string]string, t *testing.T) string {
 	sc := securecookie.New([]byte(p.Secret), []byte(p.BlockSecret))
-	sc.MaxAge(int(p.SessionLifetime))
+	sc.MaxAge(int(p.StateLifetime))
 
 	s, err := sc.Encode(p.SessionKey, state)
 	if err != nil {
@@ -308,7 +308,7 @@ func getSid(prov *Provider, t *testing.T) string {
 	}
 
 	// loop over store
-	for k, _ := range store {
+	for k := range store {
 		return fmt.Sprintf("%x", md5.Sum([]byte(k)))
 	}
 
@@ -359,13 +359,13 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 	m0 := web.New()
 
 	m1 := web.New()
-	m1_sub := web.New()
-	m1.Handle("/p/*", m1_sub)
+	m1Sub := web.New()
+	m1.Handle("/p/*", m1Sub)
 
 	m2 := web.New()
-	m2_sub := web.New()
-	m2_sub.Use(gojimw.SubRouter)
-	m2.Handle("/p/*", m2_sub)
+	m2Sub := web.New()
+	m2Sub.Use(gojimw.SubRouter)
+	m2.Handle("/p/*", m2Sub)
 
 	tests := []struct {
 		mux      *web.Mux
@@ -375,9 +375,9 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 	}{
 		{m0, m0, "/", "/oauth-redirect-google?state="},
 		{m1, m1, "/", "/oauth-redirect-google?state="},
-		{m1, m1_sub, "/p/", "/p/oauth-redirect-google?state="},
+		{m1, m1Sub, "/p/", "/p/oauth-redirect-google?state="},
 		{m2, m2, "/p/", "/p/oauth-redirect-google?state="},
-		{m2, m2_sub, "/p/", "/p/oauth-redirect-google?state="},
+		{m2, m2Sub, "/p/", "/p/oauth-redirect-google?state="},
 	}
 
 	for i, test := range tests {
@@ -390,8 +390,8 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 			"google": newGoogleEndpoint(""),
 		}
 
-		// enable subrouter test for m2_sub
-		if test.addToMux == m2_sub {
+		// enable subrouter test for m2Sub
+		if test.addToMux == m2Sub {
 			prov.SubRouter = true
 		}
 
@@ -605,7 +605,7 @@ func TestStatesCleanup(t *testing.T) {
 	prov := newProvider()
 	prov.Path = "/"
 	prov.Session = sess
-	prov.SessionLifetime = 1 * time.Second
+	prov.StateLifetime = 1 * time.Second
 	prov.Configs = map[string]*oauth2.Config{
 		"google": newGoogleEndpoint(""),
 	}
@@ -889,7 +889,7 @@ func swapSessionStore(prov *Provider, obj interface{}, doErr bool, t *testing.T)
 	}
 
 	// loop over store
-	var sessStore interface{} = nil
+	var sessStore interface{}
 	for _, item := range store {
 		sessStore, ok = item[prov.SessionKey].(Store)
 		if !ok && doErr {
