@@ -76,9 +76,20 @@ func main() {
 
     // add middleware
     goji.Use(sess.Middleware())
-    goji.Use(prov.RequireLogin(func() bool {
+    goji.Use(prov.RequireLogin(func(provName string, config *oauth2.Config, token *oauth2.Token) (string, bool) {
         // this is a super fancy check callback function
-        return true
+        switch provName {
+        case "facebook":
+            // client := config.Client(context, token)
+        case "google":
+            // client := config.Client(context, token)
+
+        default:
+            return "bad provider!", false
+        }
+
+        // no errors encountered
+        return "", true
     }))
 
     // simple demonstration handler
