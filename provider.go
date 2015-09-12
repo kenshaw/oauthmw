@@ -127,6 +127,9 @@ type Provider struct {
 	// page when there is no valid oauth2.Token in the session.
 	TemplateFn func(map[string]string, http.ResponseWriter, *http.Request)
 
+	// ErrorFn is the function called when an error is produced.
+	ErrorFn func(int, string, http.ResponseWriter, *http.Request)
+
 	// SubRouter toggles SubRouter path handling for goji subrouter middleware.
 	SubRouter bool
 
@@ -209,6 +212,10 @@ func (p *Provider) checkDefaults() {
 		p.TemplateFn = defaultTemplateFn
 	}
 
+	if p.ErrorFn == nil {
+		p.ErrorFn = defaultErrorFn
+	}
+
 	if p.MaxStates == 0 {
 		p.MaxStates = DefaultMaxStates
 	}
@@ -226,7 +233,7 @@ func (p *Provider) checkDefaults() {
 }
 
 // buildLogin creates the actual login provider.
-func (p Provider) buildLogin(checkFn func() bool, required bool) func(*web.C, http.Handler) http.Handler {
+func (p Provider) buildLogin(checkFn CheckFn, required bool) func(*web.C, http.Handler) http.Handler {
 	prov := &p
 	prov.checkDefaults()
 
@@ -241,8 +248,8 @@ func (p Provider) buildLogin(checkFn func() bool, required bool) func(*web.C, ht
 
 		return login{
 			provider: prov,
-			check:    checkFn,
 			required: required,
+			checkFn:  checkFn,
 			c:        c,
 			h:        h,
 		}
@@ -254,13 +261,13 @@ func (p Provider) buildLogin(checkFn func() bool, required bool) func(*web.C, ht
 //
 // NOTE: Any mux using this middleware WILL be visible to an unauthenticated
 // user.
-func (p Provider) Login(checkFn func() bool) func(*web.C, http.Handler) http.Handler {
+func (p Provider) Login(checkFn CheckFn) func(*web.C, http.Handler) http.Handler {
 	return p.buildLogin(checkFn, false)
 }
 
 // RequireLogin provides goji.MiddlewareType that handles oauth2 login flows,
 // requiring that there be a valid login prior to acessing a protected
 // resource.
-func (p Provider) RequireLogin(checkFn func() bool) func(*web.C, http.Handler) http.Handler {
+func (p Provider) RequireLogin(checkFn CheckFn) func(*web.C, http.Handler) http.Handler {
 	return p.buildLogin(checkFn, true)
 }

@@ -265,6 +265,29 @@ func newFacebookEndpoint(redir string) *oauth2.Config {
 	}
 }
 
+func newCheckFunc(ret bool, t *testing.T) CheckFn {
+	return func(provName string, config *oauth2.Config, token *oauth2.Token) (string, bool) {
+		msg := ""
+		if !ret {
+			msg = "invalid login"
+		}
+
+		if provName != "osin" {
+			t.Errorf("provider should be osin")
+		}
+
+		if config == nil {
+			t.Errorf("config should not be nil")
+		}
+
+		if token == nil {
+			t.Errorf("token should not be nil")
+		}
+
+		return msg, ret
+	}
+}
+
 func TestProviderEmptySecret(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -330,9 +353,7 @@ func TestLogin(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.Login(func() bool {
-		return true
-	}))
+	m0.Use(prov.Login(nil))
 	m0.Handle("/ok", okHandler)
 
 	// do initial request to establish session
@@ -397,9 +418,7 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 
 		// add middleware to mux
 		sessmw := sess.Middleware()
-		rlmw := prov.RequireLogin(func() bool {
-			return true
-		})
+		rlmw := prov.RequireLogin(nil)
 		test.addToMux.Use(sessmw)
 		test.addToMux.Use(rlmw)
 
@@ -462,9 +481,7 @@ func TestRequireLoginFlow(t *testing.T) {
 		// setup mux and middleware
 		m0 := web.New()
 		m0.Use(sess.Middleware())
-		m0.Use(prov.RequireLogin(func() bool {
-			return true
-		}))
+		m0.Use(prov.RequireLogin(nil))
 		m0.Handle("/*", okHandler)
 
 		// do initial request to establish session
@@ -533,6 +550,121 @@ func TestRequireLoginFlow(t *testing.T) {
 	oauth2Context = oauth2.NoContext
 }
 
+func TestCheckFnGood(t *testing.T) {
+	// setup test oauth server
+	server := httptest.NewServer(newOsinServer())
+	defer server.Close()
+
+	// set oauth2context HTTPClient to force oauth2 Exchange to use it
+	client := newClient(server.URL)
+	oauth2Context = context.WithValue(oauth2Context, oauth2.HTTPClient, client)
+
+	// build oauthmw
+	prov := newProvider()
+	sess := newSession()
+	prov.Session = sess
+	prov.Path = "/"
+	prov.Configs = map[string]*oauth2.Config{
+		"osin": newOsinEndpoint(server.URL),
+	}
+
+	// setup mux and middleware
+	m0 := web.New()
+	m0.Use(sess.Middleware())
+	m0.Use(prov.RequireLogin(newCheckFunc(true, t)))
+	m0.Handle("/*", okHandler)
+
+	// do initial request to establish session
+	r0, l0 := get(m0, "/", nil, t)
+	check(302, r0, t)
+	cookie := getCookie(r0, t)
+
+	// do redirect
+	r1, l1 := get(m0, l0, cookie, t)
+	check(302, r1, t)
+	urlParse(l1, t)
+	if !strings.HasPrefix(l1, server.URL) {
+		t.Fatalf("should be server.URL, got: %s", l0)
+	}
+
+	// do authorization
+	resp, err := client.Get(l1)
+	u1 := checkAuthResp(resp, err, t)
+
+	// change path due to hard coded values in
+	// osin/example.TestStorage
+	u1.Path = "/oauth-login"
+
+	// do oauth-login
+	r2, l2 := get(m0, u1.String(), cookie, t)
+	check(301, r2, t)
+
+	// verify redirect resource path is same as original request
+	if "/" != l2 {
+		t.Errorf("redirect path should be /, got: %s", l2)
+	}
+
+	// check original resource path now passes to 'OK' handler
+	r3, _ := get(m0, "/", cookie, t)
+	checkOK(r3, t)
+
+	// reset context
+	oauth2Context = oauth2.NoContext
+}
+
+func TestCheckFnBad(t *testing.T) {
+	// setup test oauth server
+	server := httptest.NewServer(newOsinServer())
+	defer server.Close()
+
+	// set oauth2context HTTPClient to force oauth2 Exchange to use it
+	client := newClient(server.URL)
+	oauth2Context = context.WithValue(oauth2Context, oauth2.HTTPClient, client)
+
+	// build oauthmw
+	prov := newProvider()
+	sess := newSession()
+	prov.Session = sess
+	prov.Path = "/"
+	prov.Configs = map[string]*oauth2.Config{
+		"osin": newOsinEndpoint(server.URL),
+	}
+
+	// setup mux and middleware
+	m0 := web.New()
+	m0.Use(sess.Middleware())
+	m0.Use(prov.RequireLogin(newCheckFunc(false, t)))
+	m0.Handle("/*", okHandler)
+
+	// do initial request to establish session
+	r0, l0 := get(m0, "/", nil, t)
+	check(302, r0, t)
+	cookie := getCookie(r0, t)
+
+	// do redirect
+	r1, l1 := get(m0, l0, cookie, t)
+	check(302, r1, t)
+	urlParse(l1, t)
+	if !strings.HasPrefix(l1, server.URL) {
+		t.Fatalf("should be server.URL, got: %s", l0)
+	}
+
+	// do authorization
+	resp, err := client.Get(l1)
+	u1 := checkAuthResp(resp, err, t)
+
+	// change path due to hard coded values in
+	// osin/example.TestStorage
+	u1.Path = "/oauth-login"
+
+	// do oauth-login
+	r2, _ := get(m0, u1.String(), cookie, t)
+	checkError(500, "invalid login", r2, t)
+
+	// reset context
+	oauth2Context = oauth2.NoContext
+}
+
 // test really long resource paths (limit to what securecookie can encode)
 func TestInvalidStates(t *testing.T) {
 	// resource path
@@ -550,9 +682,7 @@ func TestInvalidStates(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.RequireLogin(func() bool {
-		return true
-	}))
+	m0.Use(prov.RequireLogin(nil))
 	m0.Handle("/*", okHandler)
 
 	r0, _ := get(m0, respath, nil, t)
@@ -565,9 +695,7 @@ func TestInvalidStates(t *testing.T) {
 	// setup mux and middleware
 	m1 := web.New()
 	m1.Use(sess.Middleware())
-	m1.Use(prov.RequireLogin(func() bool {
-		return true
-	}))
+	m1.Use(prov.RequireLogin(nil))
 	m1.Handle("/*", okHandler)
 
 	r1, _ := get(m1, respath, nil, t)
@@ -614,9 +742,7 @@ func TestStatesCleanup(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.Login(func() bool {
-		return true
-	}))
+	m0.Use(prov.Login(nil))
 	m0.Handle("/ok", okHandler)
 
 	// do initial request to establish session
@@ -664,9 +790,7 @@ func TestRedirectErrors(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.Login(func() bool {
-		return true
-	}))
+	m0.Use(prov.Login(nil))
 	m0.Handle("/ok", okHandler)
 
 	// do initial request to establish session
@@ -778,9 +902,7 @@ func TestReturnErrors(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.RequireLogin(func() bool {
-		return true
-	}))
+	m0.Use(prov.RequireLogin(nil))
 	m0.Handle("/*", okHandler)
 
 	// do initial request to establish session
@@ -916,9 +1038,7 @@ func TestSessionStore(t *testing.T) {
 	// setup mux and middleware
 	m0 := web.New()
 	m0.Use(sess.Middleware())
-	m0.Use(prov.Login(func() bool {
-		return true
-	}))
+	m0.Use(prov.Login(nil))
 	m0.Handle("/ok", okHandler)
 
 	// do initial request to establish session
@@ -952,9 +1072,7 @@ func TestSessionStore(t *testing.T) {
 	// setup mux and middleware
 	m1 := web.New()
 	m1.Use(sess.Middleware())
-	m1.Use(prov.RequireLogin(func() bool {
-		return true
-	}))
+	m1.Use(prov.RequireLogin(nil))
 	m1.Handle("/ok", okHandler)
 
 	// check expired token

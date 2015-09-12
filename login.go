@@ -15,15 +15,28 @@ import (
 
 var oauth2Context = oauth2.NoContext
 
+// A CheckFn is passed a provider name, the original provider config, and the
+// redeemed token after a successful OAuth2.0 exchange.
+//
+// CheckFn should return a redirect URL (if any) and whether or not to allow
+// the login.
+type CheckFn func(string, *oauth2.Config, *oauth2.Token) (string, bool)
+
 // Login
 type login struct {
+	// provider configuration
 	provider *Provider
 
+	// whether or not a valid login is required
 	required bool
 
-	check func() bool
+	// check function after exchange
+	checkFn CheckFn
 
+	// web context
 	c *web.C
+
+	// the protected handler
 	h http.Handler
 }
 
@@ -37,10 +50,12 @@ func (l login) sessionStore() *Store {
 	if ok {
 		store, ok := obj.(Store)
 		if !ok {
+			// this shouldn't ever happen ...
 			log.Println("CORRUPTED/MALFORMED SESSION STORAGE. OVERWRITING")
 			store = Store{
-				Token:  &oauth2.Token{},
-				States: make(map[string]StoreState),
+				Provider: "",
+				Token:    &oauth2.Token{},
+				States:   make(map[string]StoreState),
 			}
 
 			sess[l.provider.SessionKey] = store
@@ -52,8 +67,9 @@ func (l login) sessionStore() *Store {
 
 	// create new store in session and return
 	store := Store{
-		Token:  &oauth2.Token{},
-		States: make(map[string]StoreState),
+		Provider: "",
+		Token:    &oauth2.Token{},
+		States:   make(map[string]StoreState),
 	}
 	sess[l.provider.SessionKey] = store
 	return &store
@@ -67,6 +83,7 @@ func (l login) addState(provName, state string) {
 	sess.States[key] = StoreState{
 		Provider:   provName,
 		Expiration: time.Now().Add(l.provider.StateLifetime),
+		Redeemed:   false,
 	}
 }
 
@@ -102,19 +119,19 @@ func (l login) getToken() (*oauth2.Token, bool, bool) {
 func (l login) doRedirect(provName string, stateDec map[string]string, res http.ResponseWriter, req *http.Request) {
 	prov, ok := l.provider.Configs[provName]
 	if !ok {
-		http.Error(res, "invalid provider", 500)
+		l.provider.ErrorFn(500, "invalid provider", res, req)
 		return
 	}
 
 	// verify state belongs to this session
 	if l.getSessionID() != stateDec["sid"] {
-		http.Error(res, "forged sid in redirect", 500)
+		l.provider.ErrorFn(500, "forged sid in redirect", res, req)
 		return
 	}
 
 	// verify it matches provider
 	if provName != stateDec["provider"] {
-		http.Error(res, "forged provider in redirect", 500)
+		l.provider.ErrorFn(500, "forged provider in redirect", res, req)
 		return
 	}
 
@@ -133,7 +150,7 @@ func (l login) doRedirect(provName string, stateDec map[string]string, res http.
 func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req *http.Request) {
 	// verify state belongs to this session
 	if l.getSessionID() != stateDec["sid"] {
-		http.Error(res, "forged sid in return", 500)
+		l.provider.ErrorFn(500, "forged sid in return", res, req)
 		return
 	}
 
@@ -145,32 +162,32 @@ func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req
 	sess := l.sessionStore()
 	storedState, ok := sess.States[stateKey]
 	if !ok {
-		http.Error(res, "state not found in session", 500)
+		l.provider.ErrorFn(500, "state not found in session", res, req)
 		return
 	}
 
 	// verify that stored state has not expired yet
 	if !storedState.Expiration.IsZero() && time.Now().After(storedState.Expiration) {
-		http.Error(res, "request expired. try again", 500)
+		l.provider.ErrorFn(500, "request expired. try again", res, req)
 		return
 	}
 
 	// verify not already redeemed
 	if storedState.Redeemed {
-		http.Error(res, "already redeemed. try again", 500)
+		l.provider.ErrorFn(500, "already redeemed. try again", res, req)
 		return
 	}
 
 	// verify that stored provider is same as passed provider
 	if stateDec["provider"] != storedState.Provider {
-		http.Error(res, "invalid provider", 500)
+		l.provider.ErrorFn(500, "invalid provider", res, req)
 		return
 	}
 
 	// grab redirect path
 	resource, ok := stateDec["resource"]
 	if !ok {
-		http.Error(res, "invalid resource", 500)
+		l.provider.ErrorFn(500, "invalid resource", res, req)
 		return
 	}
 
@@ -178,25 +195,25 @@ func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req
 	code := req.URL.Query().Get("code")
 	token, err := l.provider.Configs[storedState.Provider].Exchange(oauth2Context, code)
 	if err != nil {
-		log.Printf("error doing exchange with %s: %s", storedState.Provider, err)
-		http.Error(res, fmt.Sprintf("could not do exchange with %s", storedState.Provider), 500)
+		//log.Printf("error doing exchange with %s: %s", storedState.Provider, err)
+		l.provider.ErrorFn(500, fmt.Sprintf("could not do exchange with %s", storedState.Provider), res, req)
 		return
 	}
 
 	// verify token is valid
 	if !token.Valid() {
-		http.Error(res, http.StatusText(403), 403)
+		l.provider.ErrorFn(403, http.StatusText(403), res, req)
 		return
 	}
 
-	/*
-		// FIXME -- not yet implemented
-		// pass to check function
-		if !l.check() {
-			http.Error(res, "validation did not check out", 500)
+	// pass to checkFn
+	if l.checkFn != nil {
+		msg, ok := l.checkFn(storedState.Provider, l.provider.Configs[storedState.Provider], token)
+		if !ok {
+			l.provider.ErrorFn(500, msg, res, req)
 			return
 		}
-	*/
+	}
 
 	// set token expiry if TokenLifetime specified and not already indicated
 	tokenExpiry := time.Now().Add(l.provider.TokenLifetime)
@@ -206,6 +223,7 @@ func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req
 
 	// save oauth2 token in session
 	*(sess.Token) = *token
+	sess.Provider = storedState.Provider
 
 	// flag redeemed status
 	storedState.Redeemed = true
@@ -243,7 +261,7 @@ func (l login) doProtectedPage(res http.ResponseWriter, req *http.Request) {
 		provName := l.provider.ConfigsOrder[0]
 		state, err := l.provider.EncodeState(sid, provName, path)
 		if err != nil {
-			http.Error(res, fmt.Sprintf("could not encode state for %s", provName), 500)
+			l.provider.ErrorFn(500, fmt.Sprintf("could not encode state for %s", provName), res, req)
 			return
 		}
 
@@ -256,7 +274,7 @@ func (l login) doProtectedPage(res http.ResponseWriter, req *http.Request) {
 	for _, provName := range l.provider.ConfigsOrder {
 		state, err := l.provider.EncodeState(sid, provName, path)
 		if err != nil {
-			http.Error(res, fmt.Sprintf("could not encode state for %s (2)", provName), 500)
+			l.provider.ErrorFn(500, fmt.Sprintf("could not encode state for %s (2)", provName), res, req)
 			return
 		}
 		hrefs[provName] = l.redirectPath(provName, state)

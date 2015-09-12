@@ -9,15 +9,26 @@ import (
 
 // Store is the object used by oauthmw in the session.
 type Store struct {
-	Token  *oauth2.Token
+	// Provider name of token.
+	Provider string
+
+	// Token is redeemed oauth2 token.
+	Token *oauth2.Token
+
+	// States are the passed states sent to oauth2 providers.
 	States map[string]StoreState
 }
 
 // StoreState is storage for a passed oauth2 in a session.
 type StoreState struct {
-	Provider   string
+	// Provider name of state.
+	Provider string
+
+	// Expiration is when the state expires.
 	Expiration time.Time
-	Redeemed   bool
+
+	// Redeemed indicates whether or not the state has been previously redeemed.
+	Redeemed bool
 }
 
 func init() {

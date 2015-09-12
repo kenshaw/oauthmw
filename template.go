@@ -32,3 +32,8 @@ var protectedPageTpl = template.Must(template.New("oauthmw").Funcs(
 func defaultTemplateFn(hrefs map[string]string, res http.ResponseWriter, req *http.Request) {
 	protectedPageTpl.Execute(res, hrefs)
 }
+
+// defaultErrorFn handles the default behavior when errors are encountered.
+func defaultErrorFn(code int, msg string, res http.ResponseWriter, req *http.Request) {
+	http.Error(res, msg, code)
+}
