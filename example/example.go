@@ -38,7 +38,7 @@ func main() {
 		Session:     sess,
 		Path:        "/",
 		Configs: map[string]*oauth2.Config{
-			"google": &oauth2.Config{
+			"google": {
 				Endpoint:     google.Endpoint,
 				ClientID:     os.Getenv("OAUTHMW_GOOGLEID"),
 				ClientSecret: os.Getenv("OAUTHMW_GOOGLESECRET"),
@@ -48,7 +48,7 @@ func main() {
 					"https://www.googleapis.com/auth/userinfo.email",
 				},
 			},
-			"facebook": &oauth2.Config{
+			"facebook": {
 				Endpoint:     facebook.Endpoint,
 				ClientID:     os.Getenv("OAUTHMW_FACEBOOKID"),
 				ClientSecret: os.Getenv("OAUTHMW_FACEBOOKSECRET"),
