@@ -167,12 +167,17 @@ func encodeBadState(p *Provider, state map[string]string, t *testing.T) string {
 
 func newSession() *sessions.SessionOptions {
 	return &sessions.SessionOptions{
-		Name:          oauthmwcookie,
-		Secret:        "7mXpHr7GUKIVJT9TmY95i1UnvRKa0iKj",
-		ObjEnvKey:     "sessionObject",
-		SidEnvKey:     "sessionId",
-		Store:         &sessions.MemoryStore{},
-		CookieOptions: &sessions.CookieOptions{"/", 0, true, false},
+		Name:      oauthmwcookie,
+		Secret:    "7mXpHr7GUKIVJT9TmY95i1UnvRKa0iKj",
+		ObjEnvKey: "sessionObject",
+		SidEnvKey: "sessionId",
+		Store:     &sessions.MemoryStore{},
+		CookieOptions: &sessions.CookieOptions{
+			Path:     "/",
+			MaxAge:   0,
+			HttpOnly: true,
+			Secure:   false,
+		},
 	}
 }
 

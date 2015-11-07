@@ -18,12 +18,17 @@ import (
 func main() {
 	// create session
 	sess := &sessions.SessionOptions{
-		Name:          "mySessionId",
-		Secret:        "K7qv0EG3tBvDXCXhPcrRmdceS0RCMm8B",
-		ObjEnvKey:     "sessionObject",
-		SidEnvKey:     "sessionId",
-		Store:         &sessions.MemoryStore{},
-		CookieOptions: &sessions.CookieOptions{"/", 0, true, false},
+		Name:      "mySessionId",
+		Secret:    "K7qv0EG3tBvDXCXhPcrRmdceS0RCMm8B",
+		ObjEnvKey: "sessionObject",
+		SidEnvKey: "sessionId",
+		Store:     &sessions.MemoryStore{},
+		CookieOptions: &sessions.CookieOptions{
+			Path:     "/",
+			MaxAge:   0,
+			HttpOnly: true,
+			Secure:   false,
+		},
 	}
 
 	// create oauthmw provider
