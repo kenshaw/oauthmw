@@ -33,6 +33,6 @@ type StoreState struct {
 
 func init() {
 	// register oauthmw stores for use by ymichael/sessions gob.encode/decode
-	gob.Register(Store{})
-	gob.Register(StoreState{})
+	gob.RegisterName("knq.oauthmw.Store", Store{})
+	gob.RegisterName("knq.oauthmw.StoreState", StoreState{})
 }
