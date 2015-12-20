@@ -1,4 +1,4 @@
-// Package oauthmw provides an OAuth2.0 login flow middleware for Goji.
+// Package oauthmw provides an OAuth2.0 login flow middleware for Goji v2.
 package oauthmw
 
 import (
@@ -9,9 +9,9 @@ import (
 	"sort"
 	"time"
 
+	"goji.io"
+
 	"github.com/gorilla/securecookie"
-	"github.com/ymichael/sessions"
-	"github.com/zenazn/goji/web"
 	"golang.org/x/oauth2"
 )
 
@@ -62,12 +62,12 @@ type Provider struct {
 	// Secret for oauth2 transfer state (passed to gorilla/securecookie).
 	//
 	// Must not be empty.
-	Secret string
+	Secret []byte
 
 	// BlockSecret for oauth2 transfer state (passed to gorilla/securecookie).
 	//
 	// Must not be empty.
-	BlockSecret string
+	BlockSecret []byte
 
 	// Path that is being secured.
 	//
@@ -76,11 +76,6 @@ type Provider struct {
 
 	// Configs for oauth2
 	Configs map[string]*oauth2.Config
-
-	// Session management object used to retrieve/set user's session.
-	//
-	// Please see ymichael/sessions for documentation on configuring this.
-	Session *sessions.SessionOptions
 
 	// SessionKey is the key used to retrieve the oauthmw states from the
 	// session.
@@ -131,7 +126,7 @@ type Provider struct {
 	ErrorFn func(int, string, http.ResponseWriter, *http.Request)
 
 	// SubRouter toggles SubRouter path handling for goji subrouter middleware.
-	SubRouter bool
+	//SubRouter bool
 
 	// CleanupStates when true causes simple cleanup to happen on the oauth2
 	// transfer states stored in the session that are already expired.
@@ -146,7 +141,7 @@ type Provider struct {
 // EncodeState returns an encoded (and secure) oauth2 transfer state for the
 // provided session id, named provider, and specified resource.
 func (p Provider) EncodeState(sessionID, provName, resource string) (string, error) {
-	sc := securecookie.New([]byte(p.Secret), []byte(p.BlockSecret))
+	sc := securecookie.New(p.Secret, p.BlockSecret)
 	sc.MaxAge(int(p.StateLifetime))
 
 	state := map[string]string{
@@ -160,7 +155,7 @@ func (p Provider) EncodeState(sessionID, provName, resource string) (string, err
 
 // DecodeState decodes the oauth2 transfer state encoded with EncodeState.
 func (p Provider) DecodeState(data string) (map[string]string, error) {
-	sc := securecookie.New([]byte(p.Secret), []byte(p.BlockSecret))
+	sc := securecookie.New(p.Secret, p.BlockSecret)
 	sc.MaxAge(int(p.StateLifetime))
 
 	state := make(map[string]string)
@@ -171,12 +166,12 @@ func (p Provider) DecodeState(data string) (map[string]string, error) {
 
 // checkDefaults checks (and sets) defaults on Provider
 func (p *Provider) checkDefaults() {
-	if p.Secret == "" {
-		panic(errors.New("oauthmw provider Secret cannot be empty string"))
+	if len(p.Secret) < 1 {
+		panic(errors.New("oauthmw provider Secret cannot be empty"))
 	}
 
-	if p.BlockSecret == "" {
-		panic(errors.New("oauthmw provider BlockSecret cannot be empty string"))
+	if len(p.BlockSecret) < 1 {
+		panic(errors.New("oauthmw provider BlockSecret cannot be empty"))
 	}
 
 	if p.Path == "" {
@@ -233,41 +228,40 @@ func (p *Provider) checkDefaults() {
 }
 
 // buildLogin creates the actual login provider.
-func (p Provider) buildLogin(checkFn CheckFn, required bool) func(*web.C, http.Handler) http.Handler {
+func (p Provider) buildLogin(checkFn CheckFn, required bool) func(goji.Handler) goji.Handler {
 	prov := &p
 	prov.checkDefaults()
 
-	return func(c *web.C, h http.Handler) http.Handler {
-		if c.Env == nil {
+	return func(h goji.Handler) goji.Handler {
+		/*if c.Env == nil {
 			c.Env = make(map[interface{}]interface{})
 		}
 
 		if c.URLParams == nil {
 			c.URLParams = make(map[string]string)
-		}
+		}*/
 
 		return login{
 			provider: prov,
 			required: required,
 			checkFn:  checkFn,
-			c:        c,
 			h:        h,
 		}
 	}
 }
 
-// Login provides goji.MiddlewareType that handles oauth2 login flows, but does
+// Login provides a goji.Handler that handles oauth2 login flows, but does
 // not require there to be a login.
 //
 // NOTE: Any mux using this middleware WILL be visible to an unauthenticated
 // user.
-func (p Provider) Login(checkFn CheckFn) func(*web.C, http.Handler) http.Handler {
+func (p Provider) Login(checkFn CheckFn) func(goji.Handler) goji.Handler {
 	return p.buildLogin(checkFn, false)
 }
 
-// RequireLogin provides goji.MiddlewareType that handles oauth2 login flows,
+// RequireLogin provides goji.Handler that handles oauth2 login flows,
 // requiring that there be a valid login prior to acessing a protected
 // resource.
-func (p Provider) RequireLogin(checkFn CheckFn) func(*web.C, http.Handler) http.Handler {
+func (p Provider) RequireLogin(checkFn CheckFn) func(goji.Handler) goji.Handler {
 	return p.buildLogin(checkFn, true)
 }

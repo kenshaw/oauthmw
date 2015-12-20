@@ -9,7 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zenazn/goji/web"
+	"goji.io"
+
+	"github.com/knq/sessionmw"
+
+	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 )
 
@@ -33,20 +37,14 @@ type login struct {
 	// check function after exchange
 	checkFn CheckFn
 
-	// web context
-	c *web.C
-
 	// the protected handler
-	h http.Handler
+	h goji.Handler
 }
 
 // sessionStore returns the oauthmw session store.
-func (l login) sessionStore() *Store {
-	// grab session from context
-	sess := l.provider.Session.GetSessionObject(l.c)
-
+func (l login) sessionStore(ctxt context.Context) *Store {
 	// get store from session
-	obj, ok := sess[l.provider.SessionKey]
+	obj, ok := sessionmw.Get(ctxt, l.provider.SessionKey)
 	if ok {
 		store, ok := obj.(Store)
 		if !ok {
@@ -58,7 +56,7 @@ func (l login) sessionStore() *Store {
 				States:   make(map[string]StoreState),
 			}
 
-			sess[l.provider.SessionKey] = store
+			sessionmw.Set(ctxt, l.provider.SessionKey, store)
 			return &store
 		}
 
@@ -71,13 +69,14 @@ func (l login) sessionStore() *Store {
 		Token:    &oauth2.Token{},
 		States:   make(map[string]StoreState),
 	}
-	sess[l.provider.SessionKey] = store
+
+	sessionmw.Set(ctxt, l.provider.SessionKey, store)
 	return &store
 }
 
 // addState adds a state to session store.
-func (l login) addState(provName, state string) {
-	sess := l.sessionStore()
+func (l login) addState(ctxt context.Context, provName, state string) {
+	sess := l.sessionStore(ctxt)
 
 	key := fmt.Sprintf("%x", md5.Sum([]byte(state)))
 	sess.States[key] = StoreState{
@@ -87,18 +86,19 @@ func (l login) addState(provName, state string) {
 	}
 }
 
-// getSessionID returns the session id.
-func (l login) getSessionID() string {
-	sid := l.provider.Session.GetSessionId(l.c)
-	return fmt.Sprintf("%x", md5.Sum([]byte(sid)))
+// getSafeSessionID retrieves the session id from the context and returns it
+// after hashing the value.
+func (l login) getSafeSessionID(ctxt context.Context) string {
+	sessID := sessionmw.ID(ctxt)
+	return fmt.Sprintf("%x", md5.Sum([]byte(sessID)))
 }
 
 // getToken returns the stored token from session.
 //
 // Returns the token, expired, and ok state.
-func (l login) getToken() (*oauth2.Token, bool, bool) {
+func (l login) getToken(ctxt context.Context) (*oauth2.Token, bool, bool) {
 	// grab session object
-	sess := l.sessionStore()
+	sess := l.sessionStore(ctxt)
 
 	// if token not present
 	if sess.Token == nil {
@@ -116,7 +116,7 @@ func (l login) getToken() (*oauth2.Token, bool, bool) {
 // doRedirect handles oauthmw redirects.
 //
 // Will validate passed state, and adds it to the session store.
-func (l login) doRedirect(provName string, stateDec map[string]string, res http.ResponseWriter, req *http.Request) {
+func (l login) doRedirect(provName string, stateDec map[string]string, ctxt context.Context, res http.ResponseWriter, req *http.Request) {
 	prov, ok := l.provider.Configs[provName]
 	if !ok {
 		l.provider.ErrorFn(500, "invalid provider", res, req)
@@ -124,7 +124,7 @@ func (l login) doRedirect(provName string, stateDec map[string]string, res http.
 	}
 
 	// verify state belongs to this session
-	if l.getSessionID() != stateDec["sid"] {
+	if l.getSafeSessionID(ctxt) != stateDec["sid"] {
 		l.provider.ErrorFn(500, "forged sid in redirect", res, req)
 		return
 	}
@@ -137,7 +137,7 @@ func (l login) doRedirect(provName string, stateDec map[string]string, res http.
 
 	// store state to session
 	passedState := req.URL.Query().Get("state")
-	l.addState(provName, passedState)
+	l.addState(ctxt, provName, passedState)
 	http.Redirect(res, req, prov.AuthCodeURL(passedState), 302)
 }
 
@@ -147,9 +147,9 @@ func (l login) doRedirect(provName string, stateDec map[string]string, res http.
 // and then redeems (calls oauth2 Exchange) token.
 //
 // If successful, the oauth2 token will be stored in the session.
-func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req *http.Request) {
+func (l login) doReturn(stateDec map[string]string, ctxt context.Context, res http.ResponseWriter, req *http.Request) {
 	// verify state belongs to this session
-	if l.getSessionID() != stateDec["sid"] {
+	if l.getSafeSessionID(ctxt) != stateDec["sid"] {
 		l.provider.ErrorFn(500, "forged sid in return", res, req)
 		return
 	}
@@ -159,7 +159,7 @@ func (l login) doReturn(stateDec map[string]string, res http.ResponseWriter, req
 
 	// grab state from session
 	stateKey := fmt.Sprintf("%x", md5.Sum([]byte(passedState)))
-	sess := l.sessionStore()
+	sess := l.sessionStore(ctxt)
 	storedState, ok := sess.States[stateKey]
 	if !ok {
 		l.provider.ErrorFn(500, "state not found in session", res, req)
@@ -246,15 +246,15 @@ func (l login) redirectPath(provName, state string) string {
 //
 // If only one oauth2 provider, do redirect, otherwise output protected page
 // template allowing user to select login mechanism.
-func (l login) doProtectedPage(res http.ResponseWriter, req *http.Request) {
+func (l login) doProtectedPage(ctxt context.Context, res http.ResponseWriter, req *http.Request) {
 	// build sessionid for encodestate
-	sid := l.getSessionID()
+	sid := l.getSafeSessionID(ctxt)
 
 	// build path
 	path := req.URL.Path
-	if l.provider.SubRouter && l.provider.Path != "/" {
+	/*if l.provider.SubRouter && l.provider.Path != "/" {
 		path = l.provider.Path + req.URL.Path
-	}
+	}*/
 
 	// if only one in ConfigsOrder, then redirect
 	if len(l.provider.ConfigsOrder) == 1 {
@@ -283,10 +283,10 @@ func (l login) doProtectedPage(res http.ResponseWriter, req *http.Request) {
 	l.provider.TemplateFn(hrefs, res, req)
 }
 
-// ServeHTTP handles oauth2 logic for the login middleware.
-func (l login) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+// ServeHTTPC handles oauth2 logic for the login middleware.
+func (l login) ServeHTTPC(ctxt context.Context, res http.ResponseWriter, req *http.Request) {
 	// loop through states and do cleanup if enabled
-	sess := l.sessionStore()
+	sess := l.sessionStore(ctxt)
 	if l.provider.CleanupStates && len(sess.States) >= l.provider.MaxStates {
 		expiration := time.Now()
 		for h, s := range sess.States {
@@ -307,12 +307,12 @@ func (l login) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 			switch {
 			// state properly decoded and is a redirect path
 			case err == nil && strings.HasPrefix(path, l.provider.RedirectPrefix):
-				l.doRedirect(path[len(l.provider.RedirectPrefix):], stateDec, res, req)
+				l.doRedirect(path[len(l.provider.RedirectPrefix):], stateDec, ctxt, res, req)
 				return
 
 			// state properly decoded and is return (login) path
 			case err == nil && path == l.provider.ReturnName:
-				l.doReturn(stateDec, res, req)
+				l.doReturn(stateDec, ctxt, res, req)
 
 				return
 			}
@@ -321,12 +321,12 @@ func (l login) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// run protected page logic if login required and
 	// token invalid, expired, or otherwise bad
-	token, expired, ok := l.getToken()
+	token, expired, ok := l.getToken(ctxt)
 	if l.required && (!ok || expired || token == nil || !token.Valid()) {
-		l.doProtectedPage(res, req)
+		l.doProtectedPage(ctxt, res, req)
 		return
 	}
 
 	// pass to next middleware
-	l.h.ServeHTTP(res, req)
+	l.h.ServeHTTPC(ctxt, res, req)
 }

@@ -1,6 +1,6 @@
 # About oauthmw [![Build Status](https://travis-ci.org/knq/oauthmw.svg)](https://travis-ci.org/knq/oauthmw) [![Coverage Status](https://coveralls.io/repos/knq/oauthmw/badge.svg?branch=master&service=github)](https://coveralls.io/github/knq/oauthmw?branch=master) #
 
-A [Goji](https://goji.io/) middleware package for handling OAuth2.0 login
+A [Goji v2](https://goji.io/) middleware package for handling OAuth2.0 login
 flows.
 
 ## Installation ##
@@ -17,7 +17,7 @@ full API listing.
 The oauthmw package can be used similarly to the following:
 
 ```go
-// example.go
+// example/example.go
 package main
 
 import (
@@ -25,34 +25,35 @@ import (
     "net/http"
     "os"
 
-    "github.com/knq/oauthmw"
-    "github.com/ymichael/sessions"
-    "github.com/zenazn/goji"
-    "github.com/zenazn/goji/web"
+    "golang.org/x/net/context"
+
+    "goji.io"
+    "goji.io/pat"
+
     "golang.org/x/oauth2"
     "golang.org/x/oauth2/facebook"
     "golang.org/x/oauth2/google"
+
+    "github.com/knq/oauthmw"
+    "github.com/knq/sessionmw"
 )
 
 func main() {
     // create session
-    sess := &sessions.SessionOptions{
-        Name:          "mySessionId",
-        Secret:        "K7qv0EG3tBvDXCXhPcrRmdceS0RCMm8B",
-        ObjEnvKey:     "sessionObject",
-        SidEnvKey:     "sessionId",
-        Store:         &sessions.MemoryStore{},
-        CookieOptions: &sessions.CookieOptions{"/", 0, true, false},
+    sess := &sessionmw.Config{
+        Name:        "mySessionCookie",
+        Secret:      []byte("K7qv0EG3tBvDXCXhPcrRmdceS0RCMm8B"),
+        BlockSecret: []byte("xUYUQ4seHVFFhJ2iInWpnfPHrYomVeaf"),
+        Store:       sessionmw.NewMemStore(),
     }
 
     // create oauthmw provider
     prov := oauthmw.Provider{
-        Secret:      "NzfWi6Sj3gQ8cEUmu3f705bGLyGJ6Xh3",
-        BlockSecret: "LxUpc1GPFKFQ5tMpciQAgv5o80yuzBzH",
-        Session:     sess,
+        Secret:      []byte("NzfWi6Sj3gQ8cEUmu3f705bGLyGJ6Xh3"),
+        BlockSecret: []byte("LxUpc1GPFKFQ5tMpciQAgv5o80yuzBzH"),
         Path:        "/",
         Configs: map[string]*oauth2.Config{
-            "google": &oauth2.Config{
+            "google": {
                 Endpoint:     google.Endpoint,
                 ClientID:     os.Getenv("OAUTHMW_GOOGLEID"),
                 ClientSecret: os.Getenv("OAUTHMW_GOOGLESECRET"),
@@ -62,7 +63,7 @@ func main() {
                     "https://www.googleapis.com/auth/userinfo.email",
                 },
             },
-            "facebook": &oauth2.Config{
+            "facebook": {
                 Endpoint:     facebook.Endpoint,
                 ClientID:     os.Getenv("OAUTHMW_FACEBOOKID"),
                 ClientSecret: os.Getenv("OAUTHMW_FACEBOOKSECRET"),
@@ -74,9 +75,11 @@ func main() {
         },
     }
 
+    mux := goji.NewMux()
+
     // add middleware
-    goji.Use(sess.Middleware())
-    goji.Use(prov.RequireLogin(func(provName string, config *oauth2.Config, token *oauth2.Token) (string, bool) {
+    mux.UseC(sess.Handler)
+    mux.UseC(prov.RequireLogin(func(provName string, config *oauth2.Config, token *oauth2.Token) (string, bool) {
         // this is a super fancy check callback function
         switch provName {
         case "facebook":
@@ -93,10 +96,11 @@ func main() {
     }))
 
     // simple demonstration handler
-    goji.Handle("/*", func(c web.C, w http.ResponseWriter, r *http.Request) {
-        fmt.Fprintf(w, "this is my protected area! path: %s", c.URLParams["*"])
+    mux.HandleFuncC(pat.Get("/*"), func(ctxt context.Context, res http.ResponseWriter, req *http.Request) {
+        http.Error(res, fmt.Sprintf("this is my protected area! path: %+v", ctxt), http.StatusOK)
     })
 
-    goji.Serve()
+    // serve
+    http.ListenAndServe(":8000", mux)
 }
 ```
