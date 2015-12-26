@@ -4,7 +4,7 @@ import (
 	"encoding/gob"
 	"time"
 
-	"github.com/knq/sessionmw/jsonstore"
+	//"github.com/knq/sessionmw/jsonstore"
 
 	"golang.org/x/oauth2"
 )
@@ -39,6 +39,6 @@ func init() {
 	gob.RegisterName("knq.oauthmw.StoreState", StoreState{})
 
 	// register oauthmw for use with jsonstore
-	jsonstore.RegisterSchema("knq.oauthmw.Store", Store{})
-	jsonstore.RegisterSchema("knq.oauthmw.StoreState", StoreState{})
+	//jsonstore.RegisterSchema("knq.oauthmw.Store", Store{})
+	//jsonstore.RegisterSchema("knq.oauthmw.StoreState", StoreState{})
 }
