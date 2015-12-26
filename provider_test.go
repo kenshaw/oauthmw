@@ -21,10 +21,9 @@ import (
 	"golang.org/x/oauth2/facebook"
 	"golang.org/x/oauth2/google"
 
+	"github.com/knq/oauthlib"
 	"github.com/knq/sessionmw"
 
-	"github.com/RangelReale/osin"
-	"github.com/RangelReale/osin/example"
 	"github.com/gorilla/securecookie"
 )
 
@@ -188,26 +187,23 @@ func newProvider() Provider {
 	}
 }
 
-func newOsinServer() *http.ServeMux {
-	server := osin.NewServer(osin.NewServerConfig(), example.NewTestStorage())
+func newOauthlibServer(t *testing.T) *http.ServeMux {
+	server := oauthlib.NewServer(oauthlib.NewServerConfig(), oauthlib.NewTestStorage(t))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		resp := server.NewResponse()
-		resp.Type = osin.REDIRECT
-		defer resp.Close()
+		resp.ResponseType = oauthlib.REDIRECT
 
 		if ar := server.HandleAuthorizeRequest(resp, r); ar != nil {
 			ar.Authorized = true
 			server.FinishAuthorizeRequest(resp, r, ar)
 		}
-		osin.OutputJSON(resp, w, r)
+		oauthlib.WriteJSON(w, resp)
 	})
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		resp := server.NewResponse()
-		defer resp.Close()
-
 		if ar := server.HandleAccessRequest(resp, r); ar != nil {
 			ar.Authorized = true
 
@@ -220,13 +216,13 @@ func newOsinServer() *http.ServeMux {
 			return
 		}
 
-		osin.OutputJSON(resp, w, r)
+		oauthlib.WriteJSON(w, resp)
 	})
 
 	return mux
 }
 
-func newOsinEndpoint(serverurl string) *oauth2.Config {
+func newOauthlibEndpoint(serverurl string) *oauth2.Config {
 	// must use hard coded values from example.TestStorage
 	return &oauth2.Config{
 		Endpoint: oauth2.Endpoint{
@@ -274,8 +270,8 @@ func newCheckFunc(ret bool, t *testing.T) CheckFn {
 			msg = "invalid login"
 		}
 
-		if provName != "osin" {
-			t.Errorf("provider should be osin")
+		if provName != "oauthlib" {
+			t.Errorf("provider should be oauthlib")
 		}
 
 		if config == nil {
@@ -434,7 +430,7 @@ func TestRequireLoginAutoRedirect(t *testing.T) {
 
 func TestRequireLoginFlow(t *testing.T) {
 	// setup test oauth server
-	server := httptest.NewServer(newOsinServer())
+	server := httptest.NewServer(newOauthlibServer(t))
 	defer server.Close()
 
 	// set oauth2context HTTPClient to force oauth2 Exchange to use it
@@ -445,7 +441,7 @@ func TestRequireLoginFlow(t *testing.T) {
 	configs := map[string]*oauth2.Config{
 		"google":   newGoogleEndpoint(""),
 		"facebook": newFacebookEndpoint(""),
-		"osin":     newOsinEndpoint(server.URL),
+		"oauthlib": newOauthlibEndpoint(server.URL),
 	}
 
 	tests := []struct {
@@ -456,13 +452,13 @@ func TestRequireLoginFlow(t *testing.T) {
 		{"/", "/resource", []string{
 			"/oauth-redirect-google?state=",
 			"/oauth-redirect-facebook?state=",
-			"/oauth-redirect-osin?state=",
+			"/oauth-redirect-oauthlib?state=",
 		}},
 
 		{"/p", "/p/resource", []string{
 			"/p/oauth-redirect-google?state=",
 			"/p/oauth-redirect-facebook?state=",
-			"/p/oauth-redirect-osin?state=",
+			"/p/oauth-redirect-oauthlib?state=",
 		}},
 	}
 
@@ -511,15 +507,15 @@ func TestRequireLoginFlow(t *testing.T) {
 				t.Errorf("location did not parse correctly: %s -- %s", err, u0)
 			}
 
-			// if this is the local (osin) endpoint, then do actual
-			// authorization from osin server
+			// if this is the local (oauthlib) endpoint, then do actual
+			// authorization from oauthlib server
 			if strings.HasPrefix(l1, server.URL) {
 				// do authorization
 				resp, err := client.Get(l1)
 				u1 := checkAuthResp(resp, err, t)
 
 				// change path due to hard coded values in
-				// osin/example.TestStorage
+				// oauthlib/example.TestStorage
 				u1.Path = test.path + "/oauth-login"
 
 				// do oauth-login
@@ -548,7 +544,7 @@ func TestRequireLoginFlow(t *testing.T) {
 
 func TestCheckFnGood(t *testing.T) {
 	// setup test oauth server
-	server := httptest.NewServer(newOsinServer())
+	server := httptest.NewServer(newOauthlibServer(t))
 	defer server.Close()
 
 	// set oauth2context HTTPClient to force oauth2 Exchange to use it
@@ -560,7 +556,7 @@ func TestCheckFnGood(t *testing.T) {
 	sess := newSession()
 	prov.Path = "/"
 	prov.Configs = map[string]*oauth2.Config{
-		"osin": newOsinEndpoint(server.URL),
+		"oauthlib": newOauthlibEndpoint(server.URL),
 	}
 
 	// setup mux and middleware
@@ -587,7 +583,7 @@ func TestCheckFnGood(t *testing.T) {
 	u1 := checkAuthResp(resp, err, t)
 
 	// change path due to hard coded values in
-	// osin/example.TestStorage
+	// oauthlib/example.TestStorage
 	u1.Path = "/oauth-login"
 
 	// do oauth-login
@@ -609,7 +605,7 @@ func TestCheckFnGood(t *testing.T) {
 
 func TestCheckFnBad(t *testing.T) {
 	// setup test oauth server
-	server := httptest.NewServer(newOsinServer())
+	server := httptest.NewServer(newOauthlibServer(t))
 	defer server.Close()
 
 	// set oauth2context HTTPClient to force oauth2 Exchange to use it
@@ -621,7 +617,7 @@ func TestCheckFnBad(t *testing.T) {
 	sess := newSession()
 	prov.Path = "/"
 	prov.Configs = map[string]*oauth2.Config{
-		"osin": newOsinEndpoint(server.URL),
+		"oauthlib": newOauthlibEndpoint(server.URL),
 	}
 
 	// setup mux and middleware
@@ -648,7 +644,7 @@ func TestCheckFnBad(t *testing.T) {
 	u1 := checkAuthResp(resp, err, t)
 
 	// change path due to hard coded values in
-	// osin/example.TestStorage
+	// oauthlib/example.TestStorage
 	u1.Path = "/oauth-login"
 
 	// do oauth-login
@@ -858,7 +854,7 @@ func addBadState(sess sessionmw.Store, prov *Provider, state map[string]string, 
 			t.Fatal("item should be of type Store")
 		}
 		sessStore.States[key] = StoreState{
-			Provider: "osin",
+			Provider: "oauthlib",
 		}
 	}
 
@@ -867,7 +863,7 @@ func addBadState(sess sessionmw.Store, prov *Provider, state map[string]string, 
 
 func TestReturnErrors(t *testing.T) {
 	// setup test oauth server
-	server := httptest.NewServer(newOsinServer())
+	server := httptest.NewServer(newOauthlibServer(t))
 	defer server.Close()
 
 	// set oauth2context HTTPClient to force oauth2 Exchange to use it
@@ -879,7 +875,7 @@ func TestReturnErrors(t *testing.T) {
 	sess := newSession()
 	prov.Path = "/"
 	prov.Configs = map[string]*oauth2.Config{
-		"osin": newOsinEndpoint(server.URL),
+		"oauthlib": newOauthlibEndpoint(server.URL),
 	}
 	prov.checkDefaults()
 
@@ -895,33 +891,33 @@ func TestReturnErrors(t *testing.T) {
 	cookie := getCookie(r00, t)
 
 	// do redirect request to have state added to session
-	s0 := encodeState(&prov, getSid(sess.Store, &prov, t), "osin", "/resource", t)
-	r0, l0 := get(m0, "/oauth-redirect-osin?state="+s0, cookie, t)
+	s0 := encodeState(&prov, getSid(sess.Store, &prov, t), "oauthlib", "/resource", t)
+	r0, l0 := get(m0, "/oauth-redirect-oauthlib?state="+s0, cookie, t)
 	check(302, r0, t)
 	urlParse(l0, t)
 
-	// verify redirect is to osin server
+	// verify redirect is to oauthlib server
 	if !strings.HasPrefix(l0, server.URL) {
 		t.Fatalf("redir location should be server.URL, got: %s", l0)
 	}
 
-	// do authorize request with osin server
+	// do authorize request with oauthlib server
 	resp, err := client.Get(l0)
 	u1 := checkAuthResp(resp, err, t)
 
-	// change return path due to hard coded values in osin/example.TestStorage
+	// change return path due to hard coded values in oauthlib/example.TestStorage
 	u1.Path = "/oauth-login"
 
 	// check exchange error
 	q1 := fmt.Sprintf("code=%s&state=%s", "badcode", s0)
 	r1, _ := get(m0, "/oauth-login?"+q1, cookie, t)
-	checkError(500, "could not do exchange with osin", r1, t)
+	checkError(500, "could not do exchange with oauthlib", r1, t)
 
 	// check state not present in session
 	q2 := fmt.Sprintf(
 		"code=%s&state=%s",
 		url.QueryEscape(u1.Query().Get("code")),
-		encodeState(&prov, getSid(sess.Store, &prov, t), "osin", "/resource", t),
+		encodeState(&prov, getSid(sess.Store, &prov, t), "oauthlib", "/resource", t),
 	)
 	r2, _ := get(m0, "/oauth-login?"+q2, cookie, t)
 	checkError(500, "state not found in session", r2, t)
@@ -941,7 +937,7 @@ func TestReturnErrors(t *testing.T) {
 		u1.Query().Get("code"),
 		addBadState(sess.Store, &prov, map[string]string{
 			"sid":      "",
-			"provider": "osin",
+			"provider": "oauthlib",
 			"resource": "/resource",
 		}, t),
 	)
@@ -965,7 +961,7 @@ func TestReturnErrors(t *testing.T) {
 		u1.Query().Get("code"),
 		addBadState(sess.Store, &prov, map[string]string{
 			"sid":      getSid(sess.Store, &prov, t),
-			"provider": "osin",
+			"provider": "oauthlib",
 		}, t),
 	)
 	r6, _ := get(m0, "/oauth-login?"+q6, cookie, t)

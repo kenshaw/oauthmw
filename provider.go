@@ -233,14 +233,6 @@ func (p Provider) buildLogin(checkFn CheckFn, required bool) func(goji.Handler) 
 	prov.checkDefaults()
 
 	return func(h goji.Handler) goji.Handler {
-		/*if c.Env == nil {
-			c.Env = make(map[interface{}]interface{})
-		}
-
-		if c.URLParams == nil {
-			c.URLParams = make(map[string]string)
-		}*/
-
 		return login{
 			provider: prov,
 			required: required,
