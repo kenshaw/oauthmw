@@ -188,26 +188,26 @@ func newProvider() Provider {
 }
 
 func newOauthlibServer(t *testing.T) *http.ServeMux {
-	server := oauthlib.NewServer(oauthlib.NewServerConfig(), oauthlib.NewTestStorage(t))
+	server := oauthlib.NewServer(oauthlib.NewConfig(), oauthlib.NewTestStorage(t))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		resp := server.NewResponse()
 		resp.ResponseType = oauthlib.REDIRECT
 
-		if ar := server.HandleAuthorizeRequest(resp, r); ar != nil {
+		if ar := server.HandleAuthRequest(resp, r); ar != nil {
 			ar.Authorized = true
-			server.FinishAuthorizeRequest(resp, r, ar)
+			server.FinishAuthRequest(resp, r, ar)
 		}
 		oauthlib.WriteJSON(w, resp)
 	})
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		resp := server.NewResponse()
-		if ar := server.HandleAccessRequest(resp, r); ar != nil {
+		if ar := server.HandleTokenRequest(resp, r); ar != nil {
 			ar.Authorized = true
 
-			server.FinishAccessRequest(resp, r, ar)
+			server.FinishTokenRequest(resp, r, ar)
 		}
 
 		code := r.PostFormValue("code")
