@@ -21,6 +21,7 @@ import (
 	"golang.org/x/oauth2/facebook"
 	"golang.org/x/oauth2/google"
 
+	"github.com/knq/kv"
 	"github.com/knq/oauthlib"
 	"github.com/knq/sessionmw"
 
@@ -173,7 +174,7 @@ func newSession() *sessionmw.Config {
 		Name:        oauthmwcookie,
 		Secret:      []byte("7mXpHr7GUKIVJT9TmY95i1UnvRKa0iKj"),
 		BlockSecret: []byte("LxUpc1GPFKFQ5tMpciQAgv5o80yuzBzH"),
-		Store:       sessionmw.NewMemStore(),
+		Store:       kv.NewMemStore(),
 	}
 }
 
@@ -317,7 +318,7 @@ func TestProviderEmptyPath(t *testing.T) {
 }
 
 func getSid(sess sessionmw.Store, prov *Provider, t *testing.T) string {
-	mstore, ok := sess.(*sessionmw.MemStore)
+	mstore, ok := sess.(*kv.MemStore)
 	if !ok {
 		t.Fatal("session store should be convertible")
 	}
@@ -692,7 +693,7 @@ func TestInvalidStates(t *testing.T) {
 }
 
 func checkStatesCount(sess sessionmw.Store, prov *Provider, count int, msg string, t *testing.T) {
-	mstore, ok := sess.(*sessionmw.MemStore)
+	mstore, ok := sess.(*kv.MemStore)
 	if !ok {
 		t.Fatal("session store should be convertible")
 	}
@@ -801,7 +802,7 @@ func TestRedirectErrors(t *testing.T) {
 }
 
 func setStatesExpiration(sess sessionmw.Store, prov *Provider, expiration time.Time, t *testing.T) {
-	mstore, ok := sess.(*sessionmw.MemStore)
+	mstore, ok := sess.(*kv.MemStore)
 	if !ok {
 		t.Fatal("session store should be convertible")
 	}
@@ -838,7 +839,7 @@ func addBadState(sess sessionmw.Store, prov *Provider, state map[string]string, 
 
 	key := fmt.Sprintf("%x", md5.Sum([]byte(badState)))
 
-	mstore, ok := sess.(*sessionmw.MemStore)
+	mstore, ok := sess.(*kv.MemStore)
 	if !ok {
 		t.Fatal("session store should be convertible")
 	}
@@ -979,7 +980,7 @@ func TestReturnErrors(t *testing.T) {
 // gets the item in the session, and returns it
 // corrupts the actual item with passed item
 func swapSessionStore(sess sessionmw.Store, prov *Provider, obj interface{}, doErr bool, t *testing.T) interface{} {
-	mstore, ok := sess.(*sessionmw.MemStore)
+	mstore, ok := sess.(*kv.MemStore)
 	if !ok {
 		t.Fatal("session store should be convertible")
 	}
