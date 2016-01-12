@@ -15,6 +15,7 @@ import (
 	"golang.org/x/oauth2/facebook"
 	"golang.org/x/oauth2/google"
 
+	"github.com/knq/kv"
 	"github.com/knq/oauthmw"
 	"github.com/knq/sessionmw"
 )
@@ -25,7 +26,7 @@ func main() {
 		Name:        "mySessionCookie",
 		Secret:      []byte("K7qv0EG3tBvDXCXhPcrRmdceS0RCMm8B"),
 		BlockSecret: []byte("xUYUQ4seHVFFhJ2iInWpnfPHrYomVeaf"),
-		Store:       sessionmw.NewMemStore(),
+		Store:       kv.NewMemStore(),
 	}
 
 	// create oauthmw provider
