@@ -116,7 +116,7 @@ func (l login) getToken(ctxt context.Context) (*oauth2.Token, bool, bool) {
 // doRedirect handles oauthmw redirects.
 //
 // Will validate passed state, and adds it to the session store.
-func (l login) doRedirect(provName string, stateDec map[string]string, ctxt context.Context, res http.ResponseWriter, req *http.Request) {
+func (l login) doRedirect(ctxt context.Context, res http.ResponseWriter, req *http.Request, provName string, stateDec map[string]string) {
 	prov, ok := l.provider.Configs[provName]
 	if !ok {
 		l.provider.ErrorFn(500, "invalid provider", res, req)
@@ -147,7 +147,7 @@ func (l login) doRedirect(provName string, stateDec map[string]string, ctxt cont
 // and then redeems (calls oauth2 Exchange) token.
 //
 // If successful, the oauth2 token will be stored in the session.
-func (l login) doReturn(stateDec map[string]string, ctxt context.Context, res http.ResponseWriter, req *http.Request) {
+func (l login) doReturn(ctxt context.Context, res http.ResponseWriter, req *http.Request, stateDec map[string]string) {
 	// verify state belongs to this session
 	if l.getSafeSessionID(ctxt) != stateDec["sid"] {
 		l.provider.ErrorFn(500, "forged sid in return", res, req)
@@ -307,12 +307,12 @@ func (l login) ServeHTTPC(ctxt context.Context, res http.ResponseWriter, req *ht
 			switch {
 			// state properly decoded and is a redirect path
 			case err == nil && strings.HasPrefix(path, l.provider.RedirectPrefix):
-				l.doRedirect(path[len(l.provider.RedirectPrefix):], stateDec, ctxt, res, req)
+				l.doRedirect(ctxt, res, req, path[len(l.provider.RedirectPrefix):], stateDec)
 				return
 
 			// state properly decoded and is return (login) path
 			case err == nil && path == l.provider.ReturnName:
-				l.doReturn(stateDec, ctxt, res, req)
+				l.doReturn(ctxt, res, req, stateDec)
 
 				return
 			}
