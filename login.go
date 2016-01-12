@@ -270,7 +270,7 @@ func (l login) doProtectedPage(ctxt context.Context, res http.ResponseWriter, re
 	}
 
 	// build hrefs for template
-	hrefs := make(map[string]string, len(l.provider.ConfigsOrder))
+	hrefs := make(map[string]interface{}, len(l.provider.ConfigsOrder))
 	for _, provName := range l.provider.ConfigsOrder {
 		state, err := l.provider.EncodeState(sid, provName, path)
 		if err != nil {
@@ -280,7 +280,7 @@ func (l login) doProtectedPage(ctxt context.Context, res http.ResponseWriter, re
 		hrefs[provName] = l.redirectPath(provName, state)
 	}
 
-	l.provider.TemplateFn(hrefs, res, req)
+	l.provider.TemplateFn(res, req, hrefs)
 }
 
 // ServeHTTPC handles oauth2 logic for the login middleware.

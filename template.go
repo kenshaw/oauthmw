@@ -28,9 +28,9 @@ var protectedPageTpl = template.Must(template.New("oauthmw").Funcs(
 	},
 ).Parse(DefaultProtectedPageTpl))
 
-// defaultTemplateFn writes the DefaultProtectedPageTpl to a http.ResponseWriter.
-func defaultTemplateFn(hrefs map[string]string, res http.ResponseWriter, req *http.Request) {
-	protectedPageTpl.Execute(res, hrefs)
+// defaultTemplateFn writes the DefaultProtectedPageTpl to the http.ResponseWriter.
+func defaultTemplateFn(res http.ResponseWriter, req *http.Request, params map[string]interface{}) {
+	protectedPageTpl.Execute(res, params)
 }
 
 // defaultErrorFn handles the default behavior when errors are encountered.

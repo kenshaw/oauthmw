@@ -120,7 +120,7 @@ type Provider struct {
 
 	// TemplateFn is the function used for generating template on protected
 	// page when there is no valid oauth2.Token in the session.
-	TemplateFn func(map[string]string, http.ResponseWriter, *http.Request)
+	TemplateFn func(http.ResponseWriter, *http.Request, map[string]interface{})
 
 	// ErrorFn is the function called when an error is produced.
 	ErrorFn func(int, string, http.ResponseWriter, *http.Request)
