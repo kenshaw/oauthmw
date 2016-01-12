@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
@@ -109,12 +110,32 @@ func urlParse(str string, t *testing.T) *url.URL {
 
 var ErrRedirectAttempted = errors.New("redirect attempted")
 
+type httpLogger struct {
+	RoundTripper http.RoundTripper
+}
+
+func (hl *httpLogger) RoundTrip(req *http.Request) (*http.Response, error) {
+	reqBody, _ := httputil.DumpRequestOut(req, true)
+
+	res, err := hl.RoundTripper.RoundTrip(req)
+	resBody, _ := httputil.DumpResponse(res, true)
+
+	fmt.Println("------------------------------")
+	fmt.Printf("%s\n\n", reqBody)
+	fmt.Printf("%s", resBody)
+	fmt.Println("------------------------------\n\n")
+
+	return res, err
+}
+
 func newClient(serverurl string) *http.Client {
 	// create a http client with requests proxied to httptest server
 	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: func(*http.Request) (*url.URL, error) {
-				return url.Parse(serverurl)
+		Transport: &httpLogger{
+			RoundTripper: &http.Transport{
+				Proxy: func(*http.Request) (*url.URL, error) {
+					return url.Parse(serverurl)
+				},
 			},
 		},
 
